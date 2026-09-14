@@ -21,7 +21,9 @@ st.set_page_config(
 # KONFIGURASI SUMBER DATA
 # ============================================================
 
-SPREADSHEET_ID = "1NGn-bwo12bGiksqKzyZ1J1968w3ILORv-Pr49OnZHG0"
+SPREADSHEET_ID = (
+    "1NGn-bwo12bGiksqKzyZ1J1968w3ILORv-Pr49OnZHG0"
+)
 
 SHEET_LOSS = "Loss_Event_Model"
 SHEET_HOP = "HOP_Harian"
@@ -30,13 +32,14 @@ LOSS_ID_COLUMN = "Kejadian_Loss_ID"
 
 
 def google_sheet_csv_url(sheet_name: str) -> str:
-    """Membentuk URL CSV dari Google Sheet publik."""
+    """Membentuk URL CSV untuk tab Google Sheet publik."""
 
     encoded_sheet = quote(sheet_name)
 
     return (
-        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
-        f"/gviz/tq?tqx=out:csv&sheet={encoded_sheet}"
+        f"https://docs.google.com/spreadsheets/d/"
+        f"{SPREADSHEET_ID}/gviz/tq"
+        f"?tqx=out:csv&sheet={encoded_sheet}"
     )
 
 
@@ -45,21 +48,12 @@ def google_sheet_csv_url(sheet_name: str) -> str:
 # ============================================================
 
 def format_number(value, decimals: int = 0) -> str:
-    """Format angka dengan pemisah ribuan koma dan desimal titik."""
+    """Format angka: koma ribuan dan titik desimal."""
 
     if pd.isna(value):
         return "-"
 
     return f"{float(value):,.{decimals}f}"
-
-
-def format_rupiah(value) -> str:
-    """Format nilai sebagai Rupiah."""
-
-    if pd.isna(value):
-        return "Rp0"
-
-    return f"Rp{float(value):,.0f}"
 
 
 def format_compact_rupiah(value) -> str:
@@ -71,13 +65,19 @@ def format_compact_rupiah(value) -> str:
     value = float(value)
 
     if abs(value) >= 1_000_000_000_000:
-        return f"Rp{value / 1_000_000_000_000:,.2f} T"
+        return (
+            f"Rp{value / 1_000_000_000_000:,.2f} T"
+        )
 
     if abs(value) >= 1_000_000_000:
-        return f"Rp{value / 1_000_000_000:,.2f} B"
+        return (
+            f"Rp{value / 1_000_000_000:,.2f} B"
+        )
 
     if abs(value) >= 1_000_000:
-        return f"Rp{value / 1_000_000:,.2f} M"
+        return (
+            f"Rp{value / 1_000_000:,.2f} M"
+        )
 
     return f"Rp{value:,.0f}"
 
@@ -87,7 +87,7 @@ def format_compact_rupiah(value) -> str:
 # ============================================================
 
 def clean_columns(data: pd.DataFrame) -> pd.DataFrame:
-    """Membersihkan nama kolom dan kolom kosong."""
+    """Membersihkan nama kolom dan membuang kolom kosong."""
 
     data = data.copy()
 
@@ -112,7 +112,7 @@ def convert_numeric(
     data: pd.DataFrame,
     columns: list[str],
 ) -> pd.DataFrame:
-    """Mengonversi beberapa kolom menjadi numerik."""
+    """Mengubah kolom terpilih menjadi numerik."""
 
     data = data.copy()
 
@@ -140,7 +140,7 @@ def convert_dates(
     data: pd.DataFrame,
     columns: list[str],
 ) -> pd.DataFrame:
-    """Mengonversi beberapa kolom menjadi tanggal."""
+    """Mengubah kolom terpilih menjadi format tanggal."""
 
     data = data.copy()
 
@@ -160,7 +160,9 @@ def convert_dates(
 # ============================================================
 
 @st.cache_data(ttl=600, show_spinner=False)
-def load_google_sheet(sheet_name: str) -> pd.DataFrame:
+def load_google_sheet(
+    sheet_name: str,
+) -> pd.DataFrame:
     """Membaca satu tab Google Sheet publik."""
 
     url = google_sheet_csv_url(sheet_name)
@@ -173,7 +175,7 @@ def load_google_sheet(sheet_name: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def load_all_data():
-    """Membaca dan membersihkan data Loss Event dan HOP."""
+    """Membaca dan membersihkan data Kejadian Loss dan HOP."""
 
     loss = load_google_sheet(SHEET_LOSS)
     hop = load_google_sheet(SHEET_HOP)
@@ -225,7 +227,7 @@ def validate_required_columns(
     required_columns: list[str],
     table_name: str,
 ):
-    """Menghentikan aplikasi apabila kolom utama tidak ditemukan."""
+    """Menghentikan aplikasi jika kolom utama tidak ditemukan."""
 
     missing_columns = [
         column
@@ -235,12 +237,13 @@ def validate_required_columns(
 
     if missing_columns:
         st.error(
-            f"Kolom berikut tidak ditemukan pada {table_name}: "
-            f"{', '.join(missing_columns)}"
+            f"Kolom berikut tidak ditemukan pada "
+            f"{table_name}: {', '.join(missing_columns)}"
         )
 
         st.info(
-            f"Kolom yang tersedia: {', '.join(data.columns)}"
+            f"Kolom yang tersedia: "
+            f"{', '.join(data.columns)}"
         )
 
         st.stop()
@@ -251,17 +254,22 @@ def validate_required_columns(
 # ============================================================
 
 try:
-    with st.spinner("Membaca data Google Sheet publik..."):
+    with st.spinner(
+        "Membaca data Google Sheet publik..."
+    ):
         loss_data, hop_data = load_all_data()
 
 except Exception as error:
-    st.error("Google Sheet publik belum berhasil dibaca.")
+    st.error(
+        "Google Sheet publik belum berhasil dibaca."
+    )
 
     st.exception(error)
 
     st.info(
         "Pastikan Google Sheet telah diatur sebagai "
-        "'Anyone with the link' dan setiap tab masih tersedia."
+        "'Anyone with the link' dan setiap tab "
+        "masih tersedia."
     )
 
     st.stop()
@@ -399,7 +407,7 @@ st.sidebar.caption(
 
 
 # ============================================================
-# PENERAPAN FILTER
+# PENERAPAN FILTER KEJADIAN LOSS
 # ============================================================
 
 filtered = loss_data.copy()
@@ -421,7 +429,9 @@ if selected_units:
 
 if selected_categories:
     filtered = filtered[
-        filtered["Kategori_Final"].isin(selected_categories)
+        filtered["Kategori_Final"].isin(
+            selected_categories
+        )
     ]
 
 if (
@@ -429,20 +439,30 @@ if (
     and "Kesiapan_Model" in filtered.columns
 ):
     filtered = filtered[
-        filtered["Kesiapan_Model"].isin(selected_readiness)
+        filtered["Kesiapan_Model"].isin(
+            selected_readiness
+        )
     ]
 
+
+# ============================================================
+# PENERAPAN FILTER HOP
+# ============================================================
 
 filtered_hop = hop_data.copy()
 
 if selected_years and "Tahun" in filtered_hop.columns:
     filtered_hop = filtered_hop[
-        filtered_hop["Tahun"].isin(selected_years)
+        filtered_hop["Tahun"].isin(
+            selected_years
+        )
     ]
 
 if selected_units:
     filtered_hop = filtered_hop[
-        filtered_hop["HOP_Unit_Key"].isin(selected_units)
+        filtered_hop["HOP_Unit_Key"].isin(
+            selected_units
+        )
     ]
 
 
@@ -450,11 +470,14 @@ if selected_units:
 # HEADER DASHBOARD
 # ============================================================
 
-st.title("Risk Model Hambatan Energi Primer Batubara")
+st.title(
+    "Risk Model Hambatan Energi Primer Batubara"
+)
 
 st.caption(
-    "Pemodelan risiko berbasis Kejadian Loss, HOP harian, "
-    "frekuensi kejadian, dan severity kerugian."
+    "Pemodelan risiko berbasis Kejadian Loss, "
+    "HOP harian, frekuensi kejadian, "
+    "dan severity kerugian."
 )
 
 
@@ -462,19 +485,27 @@ st.caption(
 # KPI UTAMA
 # ============================================================
 
-total_loss_events = filtered[LOSS_ID_COLUMN].nunique()
+total_loss_events = (
+    filtered[LOSS_ID_COLUMN].nunique()
+)
 
-total_loss_production = filtered[
-    "Loss_Production_MWh"
-].sum()
+total_loss_production = (
+    filtered["Loss_Production_MWh"].sum()
+)
 
-total_loss_opportunity = filtered[
-    "Loss_Opportunity_Rp"
-].sum()
+total_loss_opportunity = (
+    filtered["Loss_Opportunity_Rp"].sum()
+)
 
-total_hop_records = len(filtered_hop)
+# Seluruh observasi HOP pada sumber data
+total_hop_records = len(hop_data)
+
+# Observasi HOP yang sesuai dengan filter tahun dan unit
+filtered_hop_records = len(filtered_hop)
 
 average_hop = filtered_hop["Nilai_HOP"].mean()
+
+minimum_hop = filtered_hop["Nilai_HOP"].min()
 
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
@@ -483,8 +514,8 @@ kpi1.metric(
     "Kejadian Loss",
     format_number(total_loss_events),
     help=(
-        "Jumlah kejadian loss setelah segmen KKP/PLO "
-        "yang berkesinambungan digabungkan."
+        "Jumlah kejadian loss setelah segmen "
+        "KKP/PLO yang berkesinambungan digabungkan."
     ),
 )
 
@@ -495,23 +526,34 @@ kpi2.metric(
 
 kpi3.metric(
     "Loss Opportunity",
-    format_compact_rupiah(total_loss_opportunity),
+    format_compact_rupiah(
+        total_loss_opportunity
+    ),
 )
 
 kpi4.metric(
-    "Data HOP Harian",
+    "Total Data HOP",
     format_number(total_hop_records),
+    help=(
+        "Seluruh observasi HOP harian yang tersedia "
+        "pada Google Sheet sebelum filter diterapkan."
+    ),
 )
 
 kpi5.metric(
-    "Rata-rata HOP",
-    format_number(average_hop, 2),
+    "HOP Sesuai Filter",
+    format_number(filtered_hop_records),
+    help=(
+        "Observasi HOP harian yang sesuai dengan "
+        "filter tahun dan unit."
+    ),
 )
 
 
 if filtered.empty:
     st.warning(
-        "Tidak ada data yang sesuai dengan kombinasi filter."
+        "Tidak ada data yang sesuai dengan "
+        "kombinasi filter."
     )
 
     st.stop()
@@ -528,7 +570,13 @@ st.success(
 # TAB DASHBOARD
 # ============================================================
 
-tab_summary, tab_loss, tab_hop, tab_quality, tab_method = st.tabs(
+(
+    tab_summary,
+    tab_loss,
+    tab_hop,
+    tab_quality,
+    tab_method,
+) = st.tabs(
     [
         "Ringkasan",
         "Kejadian Loss",
@@ -544,7 +592,9 @@ tab_summary, tab_loss, tab_hop, tab_quality, tab_method = st.tabs(
 # ============================================================
 
 with tab_summary:
-    st.subheader("Ringkasan Risiko Hambatan Energi Primer")
+    st.subheader(
+        "Ringkasan Risiko Hambatan Energi Primer"
+    )
 
     col1, col2 = st.columns(2)
 
@@ -561,7 +611,10 @@ with tab_summary:
             monthly_summary = (
                 monthly_loss
                 .dropna(subset=["Periode"])
-                .groupby("Periode", as_index=False)
+                .groupby(
+                    "Periode",
+                    as_index=False,
+                )
                 .agg(
                     Loss_Production_MWh=(
                         "Loss_Production_MWh",
@@ -579,14 +632,18 @@ with tab_summary:
                 x="Periode",
                 y="Loss_Production_MWh",
                 markers=True,
-                title="Tren Loss Production Bulanan",
+                title=(
+                    "Tren Loss Production Bulanan"
+                ),
                 labels={
                     "Periode": "Periode",
                     "Loss_Production_MWh": (
                         "Loss Production (MWh)"
                     ),
                 },
-                color_discrete_sequence=["#0F6CBD"],
+                color_discrete_sequence=[
+                    "#0F6CBD"
+                ],
             )
 
             figure_monthly.update_layout(
@@ -608,7 +665,10 @@ with tab_summary:
     with col2:
         regional_summary = (
             filtered
-            .groupby("Regional", as_index=False)
+            .groupby(
+                "Regional",
+                as_index=False,
+            )
             .agg(
                 Loss_Opportunity_Rp=(
                     "Loss_Opportunity_Rp",
@@ -625,14 +685,18 @@ with tab_summary:
             regional_summary,
             x="Regional",
             y="Loss_Opportunity_Rp",
-            title="Loss Opportunity per Regional",
+            title=(
+                "Loss Opportunity per Regional"
+            ),
             labels={
                 "Regional": "Regional",
                 "Loss_Opportunity_Rp": (
                     "Loss Opportunity (Rp)"
                 ),
             },
-            color_discrete_sequence=["#00A6A6"],
+            color_discrete_sequence=[
+                "#00A6A6"
+            ],
         )
 
         figure_regional.update_layout(
@@ -657,7 +721,10 @@ with tab_summary:
     with col3:
         category_summary = (
             filtered
-            .groupby("Kategori_Final", as_index=False)
+            .groupby(
+                "Kategori_Final",
+                as_index=False,
+            )
             .agg(
                 Loss_Opportunity_Rp=(
                     "Loss_Opportunity_Rp",
@@ -679,11 +746,16 @@ with tab_summary:
             x="Loss_Opportunity_Rp",
             y="Kategori_Final",
             orientation="h",
-            title="Loss Opportunity per Kategori",
+            title=(
+                "Loss Opportunity per Kategori"
+            ),
             labels={
                 "Kategori_Final": "Kategori",
                 "Loss_Opportunity_Rp": (
                     "Loss Opportunity (Rp)"
+                ),
+                "Jumlah_Kejadian": (
+                    "Jumlah Kejadian Loss"
                 ),
             },
             color="Jumlah_Kejadian",
@@ -709,7 +781,10 @@ with tab_summary:
     with col4:
         unit_summary = (
             filtered
-            .groupby("HOP_Unit_Key", as_index=False)
+            .groupby(
+                "HOP_Unit_Key",
+                as_index=False,
+            )
             .agg(
                 Loss_Production_MWh=(
                     "Loss_Production_MWh",
@@ -730,14 +805,19 @@ with tab_summary:
             x="Loss_Production_MWh",
             y="HOP_Unit_Key",
             orientation="h",
-            title="Top 10 Unit Berdasarkan Loss Production",
+            title=(
+                "Top 10 Unit Berdasarkan "
+                "Loss Production"
+            ),
             labels={
                 "HOP_Unit_Key": "Unit",
                 "Loss_Production_MWh": (
                     "Loss Production (MWh)"
                 ),
             },
-            color_discrete_sequence=["#F59E0B"],
+            color_discrete_sequence=[
+                "#F59E0B"
+            ],
         )
 
         figure_unit.update_layout(
@@ -765,8 +845,9 @@ with tab_loss:
     st.subheader("Data Kejadian Loss")
 
     st.caption(
-        "Satu Kejadian Loss dapat terdiri dari satu atau "
-        "beberapa segmen KKP/PLO yang berkesinambungan."
+        "Satu Kejadian Loss dapat terdiri dari "
+        "satu atau beberapa segmen KKP/PLO yang "
+        "berkesinambungan."
     )
 
     display_columns = [
@@ -782,12 +863,15 @@ with tab_loss:
         "End_DateTime",
         "Jenis_Kejadian_Loss",
         "Jumlah_Segmen",
+        "Penyebab_Source",
         "Loss_Production_MWh",
         "Loss_Opportunity_Rp",
         "Nilai_HOP",
         "Batas_HOP_P20",
         "Status_HOP",
+        "Sumber_HOP",
         "Kesiapan_Model",
+        "Penggunaan_Model",
     ]
 
     display_columns = [
@@ -821,9 +905,16 @@ with tab_loss:
         hide_index=True,
         height=620,
         column_config={
-            LOSS_ID_COLUMN: st.column_config.TextColumn(
-                "Kejadian Loss ID",
-                width="medium",
+            LOSS_ID_COLUMN: (
+                st.column_config.TextColumn(
+                    "Kejadian Loss ID",
+                    width="medium",
+                )
+            ),
+            "Jenis_Kejadian_Loss": (
+                st.column_config.TextColumn(
+                    "Jenis Kejadian Loss"
+                )
             ),
             "Loss_Production_MWh": (
                 st.column_config.NumberColumn(
@@ -837,9 +928,11 @@ with tab_loss:
                     format="Rp %,.0f",
                 )
             ),
-            "Nilai_HOP": st.column_config.NumberColumn(
-                "Nilai HOP",
-                format="%.2f",
+            "Nilai_HOP": (
+                st.column_config.NumberColumn(
+                    "Nilai HOP",
+                    format="%.2f",
+                )
             ),
             "Batas_HOP_P20": (
                 st.column_config.NumberColumn(
@@ -869,7 +962,9 @@ with tab_loss:
     st.download_button(
         "Unduh Kejadian Loss (CSV)",
         data=csv_loss,
-        file_name="kejadian_loss_terfilter.csv",
+        file_name=(
+            "kejadian_loss_terfilter.csv"
+        ),
         mime="text/csv",
     )
 
@@ -880,6 +975,37 @@ with tab_loss:
 
 with tab_hop:
     st.subheader("Data HOP Harian")
+
+    hop_metric1, hop_metric2, hop_metric3 = (
+        st.columns(3)
+    )
+
+    hop_metric1.metric(
+        "HOP Sesuai Filter",
+        format_number(filtered_hop_records),
+        help=(
+            "Jumlah observasi HOP setelah filter "
+            "tahun dan unit diterapkan."
+        ),
+    )
+
+    hop_metric2.metric(
+        "Rata-rata HOP",
+        format_number(average_hop, 2),
+        help=(
+            "Rata-rata nilai HOP dari seluruh "
+            "observasi yang sesuai filter."
+        ),
+    )
+
+    hop_metric3.metric(
+        "Minimum HOP",
+        format_number(minimum_hop, 2),
+        help=(
+            "Nilai HOP terendah dari observasi "
+            "yang sesuai filter."
+        ),
+    )
 
     hop_col1, hop_col2 = st.columns([2, 1])
 
@@ -909,12 +1035,16 @@ with tab_hop:
                 hop_trend,
                 x="Tanggal",
                 y="Nilai_HOP",
-                title="Tren Rata-rata HOP Harian",
+                title=(
+                    "Tren Rata-rata HOP Harian"
+                ),
                 labels={
                     "Tanggal": "Tanggal",
                     "Nilai_HOP": "HOP",
                 },
-                color_discrete_sequence=["#0F6CBD"],
+                color_discrete_sequence=[
+                    "#0F6CBD"
+                ],
             )
 
             figure_hop.update_layout(
@@ -931,6 +1061,11 @@ with tab_hop:
             st.plotly_chart(
                 figure_hop,
                 use_container_width=True,
+            )
+
+        else:
+            st.info(
+                "Tidak ada data HOP sesuai filter."
             )
 
     with hop_col2:
@@ -978,8 +1113,18 @@ with tab_hop:
                         format="%.2f",
                     )
                 ),
+                "Jumlah_Data": (
+                    st.column_config.NumberColumn(
+                        "Jumlah Data",
+                        format="%d",
+                    )
+                ),
             },
         )
+
+    st.subheader(
+        "Detail Observasi HOP Harian"
+    )
 
     st.dataframe(
         filtered_hop,
@@ -987,9 +1132,11 @@ with tab_hop:
         hide_index=True,
         height=480,
         column_config={
-            "Tanggal": st.column_config.DateColumn(
-                "Tanggal",
-                format="DD-MMM-YYYY",
+            "Tanggal": (
+                st.column_config.DateColumn(
+                    "Tanggal",
+                    format="DD-MMM-YYYY",
+                )
             ),
             "Nilai_HOP": (
                 st.column_config.NumberColumn(
@@ -1006,17 +1153,23 @@ with tab_hop:
 # ============================================================
 
 with tab_quality:
-    st.subheader("Kualitas dan Kesiapan Data")
+    st.subheader(
+        "Kualitas dan Kesiapan Data"
+    )
 
     readiness_count = pd.DataFrame()
 
     if "Kesiapan_Model" in filtered.columns:
         readiness_count = (
             filtered["Kesiapan_Model"]
-            .fillna("BELUM DIKLASIFIKASIKAN")
+            .fillna(
+                "BELUM DIKLASIFIKASIKAN"
+            )
             .value_counts()
             .rename_axis("Kesiapan_Model")
-            .reset_index(name="Jumlah_Kejadian")
+            .reset_index(
+                name="Jumlah_Kejadian"
+            )
         )
 
     if not readiness_count.empty:
@@ -1025,9 +1178,13 @@ with tab_quality:
             x="Kesiapan_Model",
             y="Jumlah_Kejadian",
             color="Kesiapan_Model",
-            title="Status Kesiapan Data untuk Model",
+            title=(
+                "Status Kesiapan Data untuk Model"
+            ),
             labels={
-                "Kesiapan_Model": "Kesiapan Model",
+                "Kesiapan_Model": (
+                    "Kesiapan Model"
+                ),
                 "Jumlah_Kejadian": (
                     "Jumlah Kejadian Loss"
                 ),
@@ -1048,15 +1205,21 @@ with tab_quality:
     missing_hop = 0
 
     if "Nilai_HOP" in filtered.columns:
-        missing_hop = filtered[
-            "Nilai_HOP"
-        ].isna().sum()
+        missing_hop = (
+            filtered["Nilai_HOP"]
+            .isna()
+            .sum()
+        )
 
-    duplicate_loss_id = filtered[
-        LOSS_ID_COLUMN
-    ].duplicated().sum()
+    duplicate_loss_id = (
+        filtered[LOSS_ID_COLUMN]
+        .duplicated()
+        .sum()
+    )
 
-    quality1, quality2, quality3 = st.columns(3)
+    quality1, quality2, quality3 = (
+        st.columns(3)
+    )
 
     quality1.metric(
         "Kejadian Loss Tanpa HOP",
@@ -1069,8 +1232,8 @@ with tab_quality:
     )
 
     quality3.metric(
-        "Total Data Tersaring",
-        format_number(len(filtered)),
+        "Total Kejadian Tersaring",
+        format_number(total_loss_events),
     )
 
 
@@ -1079,35 +1242,43 @@ with tab_quality:
 # ============================================================
 
 with tab_method:
-    st.subheader("Metodologi Data dan Pemodelan")
+    st.subheader(
+        "Metodologi Data dan Pemodelan"
+    )
 
     st.markdown(
         """
 ### Definisi Kejadian Loss
 
-**Kejadian Loss** adalah satu rangkaian kejadian risiko yang
-menimbulkan kehilangan produksi atau kehilangan peluang
-pendapatan.
+**Kejadian Loss** adalah satu rangkaian kejadian risiko
+yang menimbulkan kehilangan produksi atau kehilangan
+peluang pendapatan.
 
-Beberapa segmen KKP/PLO yang masih merupakan satu rangkaian
-kejadian dapat digabungkan menjadi satu Kejadian Loss. Tujuannya
-adalah mencegah penghitungan frekuensi secara berlebihan atau
-*double counting*.
+Beberapa segmen KKP/PLO yang masih merupakan satu
+rangkaian kejadian dapat digabungkan menjadi satu
+Kejadian Loss. Tujuannya adalah mencegah penghitungan
+frekuensi secara berlebihan atau *double counting*.
 
 ### Struktur data
 
-1. `Loss_Event_Detail` berfungsi sebagai data rinci dan audit trail.
-2. `Loss_Event_Model` berfungsi sebagai data utama untuk pemodelan.
-3. `HOP_Harian` berisi kondisi Hari Operasi Persediaan per unit.
-4. `Kejadian_Loss_ID` menjadi identitas unik setiap Kejadian Loss.
-5. Awalan identitas menggunakan format `LOSS-TAHUN-NOMOR`.
+1. `Loss_Event_Detail` berfungsi sebagai data rinci
+   dan audit trail.
+2. `Loss_Event_Model` berfungsi sebagai data utama
+   untuk pemodelan.
+3. `HOP_Harian` berisi kondisi Hari Operasi
+   Persediaan per unit.
+4. `Kejadian_Loss_ID` menjadi identitas unik setiap
+   Kejadian Loss.
+5. Awalan identitas menggunakan format
+   `LOSS-TAHUN-NOMOR`.
 
 ### Hubungan HOP dan Kejadian Loss
 
-Nilai HOP digunakan untuk menguji apakah penurunan persediaan
-energi primer meningkatkan kemungkinan terjadinya Kejadian Loss.
+Nilai HOP digunakan untuk menguji apakah penurunan
+persediaan energi primer meningkatkan kemungkinan
+terjadinya Kejadian Loss.
 
-Model berikutnya dapat memisahkan frekuensi kejadian berdasarkan:
+Model dapat memisahkan frekuensi kejadian berdasarkan:
 
 - HOP rendah;
 - HOP normal;
