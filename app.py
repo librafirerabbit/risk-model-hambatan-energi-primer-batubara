@@ -1,12 +1,14 @@
-import numpy as np
+from urllib.parse import quote
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 
-# =========================================================
+# ============================================================
 # KONFIGURASI APLIKASI
-# =========================================================
+# ============================================================
+
 st.set_page_config(
     page_title="Risk Model Hambatan Energi Primer Batubara",
     page_icon="⚡",
@@ -15,136 +17,54 @@ st.set_page_config(
 )
 
 
+# ============================================================
+# KONFIGURASI SUMBER DATA
+# ============================================================
+
 SPREADSHEET_ID = "1NGn-bwo12bGiksqKzyZ1J1968w3ILORv-Pr49OnZHG0"
 
-SHEET_GID = {
-    "Loss_Event_Model": "982468318",
-    "HOP_Harian": "550714475",
-}
+SHEET_LOSS = "Loss_Event_Model"
+SHEET_HOP = "HOP_Harian"
 
-MONTH_ORDER = [
-    "Jan", "Feb", "Mar", "Apr",
-    "May", "Jun", "Jul", "Aug",
-    "Sep", "Oct", "Nov", "Dec",
-]
-
-MONTH_NUMBER = {
-    month: number
-    for number, month in enumerate(MONTH_ORDER, start=1)
-}
+LOSS_ID_COLUMN = "Kejadian_Loss_ID"
 
 
-# =========================================================
-# WARNA DAN TAMPILAN
-# =========================================================
-PLN_BLUE = "#0072CE"
-PLN_NAVY = "#17365D"
-PLN_TEAL = "#00A2B8"
-PLN_GREEN = "#2E8B57"
-PLN_AMBER = "#F4B942"
-PLN_RED = "#D64545"
+def google_sheet_csv_url(sheet_name: str) -> str:
+    """Membentuk URL CSV dari Google Sheet publik."""
 
-CATEGORY_COLORS = {
-    "Pasokan Energi Primer": "#0072CE",
-    "Kualitas Energi Primer": "#00A2B8",
-    "Infrastruktur Energi Primer": "#F4B942",
-    "Peralatan Pengumpan/Pembakaran": "#D96C3D",
-}
+    encoded_sheet = quote(sheet_name)
 
-st.markdown(
-    """
-    <style>
-    .stApp {
-        background-color: #F5F7FA;
-    }
-
-    [data-testid="stSidebar"] {
-        background-color: #E8EEF5;
-        border-right: 1px solid #D1D9E6;
-    }
-
-    [data-testid="stMetric"] {
-        background: #FFFFFF;
-        border: 1px solid #D9E2EC;
-        border-radius: 12px;
-        padding: 16px 18px;
-        box-shadow: 0 2px 8px rgba(23, 54, 93, 0.06);
-    }
-
-    [data-testid="stMetricLabel"] {
-        color: #52667A;
-        font-weight: 600;
-    }
-
-    [data-testid="stMetricValue"] {
-        color: #17365D;
-    }
-
-    div[data-baseweb="select"] > div {
-        background-color: #FFFFFF;
-        border-color: #B8C5D6;
-    }
-
-    .dashboard-note {
-        background: #E8F4FD;
-        border-left: 5px solid #0072CE;
-        border-radius: 8px;
-        color: #17365D;
-        padding: 14px 18px;
-        margin: 8px 0 20px 0;
-    }
-
-    .quality-warning {
-        background: #FFF5D9;
-        border-left: 5px solid #F4B942;
-        border-radius: 8px;
-        color: #5C4700;
-        padding: 14px 18px;
-        margin: 10px 0;
-    }
-
-    .section-title {
-        color: #17365D;
-        font-size: 1.45rem;
-        font-weight: 700;
-        margin-top: 16px;
-        margin-bottom: 8px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# =========================================================
-# FUNGSI DATA
-# =========================================================
-@st.cache_data(ttl=900)
-def load_google_sheet(gid: str) -> pd.DataFrame:
-    url = (
+    return (
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
-        f"/export?format=csv&gid={gid}"
-    )
-    return pd.read_csv(url)
-
-
-def clean_numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(
-        series.astype(str)
-        .str.replace("Rp", "", regex=False)
-        .str.replace(",", "", regex=False)
-        .str.strip(),
-        errors="coerce",
+        f"/gviz/tq?tqx=out:csv&sheet={encoded_sheet}"
     )
 
 
-def format_number(value: float, decimals: int = 0) -> str:
+# ============================================================
+# FORMAT ANGKA
+# ============================================================
+
+def format_number(value, decimals: int = 0) -> str:
+    """Format angka dengan pemisah ribuan koma dan desimal titik."""
+
     if pd.isna(value):
-        value = 0
-    return f"{value:,.{decimals}f}"
+        return "-"
+
+    return f"{float(value):,.{decimals}f}"
 
 
-def format_rupiah_short(value: float) -> str:
+def format_rupiah(value) -> str:
+    """Format nilai sebagai Rupiah."""
+
+    if pd.isna(value):
+        return "Rp0"
+
+    return f"Rp{float(value):,.0f}"
+
+
+def format_compact_rupiah(value) -> str:
+    """Format nilai Rupiah menjadi juta, miliar, atau triliun."""
+
     if pd.isna(value):
         return "Rp0"
 
@@ -152,613 +72,1072 @@ def format_rupiah_short(value: float) -> str:
 
     if abs(value) >= 1_000_000_000_000:
         return f"Rp{value / 1_000_000_000_000:,.2f} T"
+
     if abs(value) >= 1_000_000_000:
         return f"Rp{value / 1_000_000_000:,.2f} B"
+
     if abs(value) >= 1_000_000:
         return f"Rp{value / 1_000_000:,.2f} M"
 
     return f"Rp{value:,.0f}"
 
 
-def safe_multiselect(label: str, options: list, key: str) -> list:
-    return st.sidebar.multiselect(
-        label=label,
-        options=options,
-        default=options,
-        key=key,
+# ============================================================
+# PEMBERSIHAN DATA
+# ============================================================
+
+def clean_columns(data: pd.DataFrame) -> pd.DataFrame:
+    """Membersihkan nama kolom dan kolom kosong."""
+
+    data = data.copy()
+
+    data.columns = [
+        str(column).strip()
+        for column in data.columns
+    ]
+
+    unnamed_columns = [
+        column
+        for column in data.columns
+        if str(column).startswith("Unnamed:")
+    ]
+
+    if unnamed_columns:
+        data = data.drop(columns=unnamed_columns)
+
+    return data
+
+
+def convert_numeric(
+    data: pd.DataFrame,
+    columns: list[str],
+) -> pd.DataFrame:
+    """Mengonversi beberapa kolom menjadi numerik."""
+
+    data = data.copy()
+
+    for column in columns:
+        if column not in data.columns:
+            continue
+
+        cleaned = (
+            data[column]
+            .astype(str)
+            .str.replace("Rp", "", regex=False)
+            .str.replace(",", "", regex=False)
+            .str.strip()
+        )
+
+        data[column] = pd.to_numeric(
+            cleaned,
+            errors="coerce",
+        )
+
+    return data
+
+
+def convert_dates(
+    data: pd.DataFrame,
+    columns: list[str],
+) -> pd.DataFrame:
+    """Mengonversi beberapa kolom menjadi tanggal."""
+
+    data = data.copy()
+
+    for column in columns:
+        if column in data.columns:
+            data[column] = pd.to_datetime(
+                data[column],
+                errors="coerce",
+                dayfirst=True,
+            )
+
+    return data
+
+
+# ============================================================
+# MEMBACA GOOGLE SHEET
+# ============================================================
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_google_sheet(sheet_name: str) -> pd.DataFrame:
+    """Membaca satu tab Google Sheet publik."""
+
+    url = google_sheet_csv_url(sheet_name)
+
+    data = pd.read_csv(url)
+    data = clean_columns(data)
+
+    return data
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_all_data():
+    """Membaca dan membersihkan data Loss Event dan HOP."""
+
+    loss = load_google_sheet(SHEET_LOSS)
+    hop = load_google_sheet(SHEET_HOP)
+
+    loss = convert_numeric(
+        loss,
+        [
+            "Tahun",
+            "Jumlah_Segmen",
+            "Loss_Production_MWh",
+            "Loss_Opportunity_Rp",
+            "Nilai_HOP",
+            "Batas_HOP_P20",
+        ],
     )
 
+    loss = convert_dates(
+        loss,
+        [
+            "Start_DateTime",
+            "End_DateTime",
+        ],
+    )
 
-# =========================================================
-# MEMUAT DAN MEMBERSIHKAN DATA
-# =========================================================
+    hop = convert_numeric(
+        hop,
+        [
+            "Tahun",
+            "Nilai_HOP",
+        ],
+    )
+
+    hop = convert_dates(
+        hop,
+        [
+            "Tanggal",
+        ],
+    )
+
+    return loss, hop
+
+
+# ============================================================
+# VALIDASI DATA
+# ============================================================
+
+def validate_required_columns(
+    data: pd.DataFrame,
+    required_columns: list[str],
+    table_name: str,
+):
+    """Menghentikan aplikasi apabila kolom utama tidak ditemukan."""
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in data.columns
+    ]
+
+    if missing_columns:
+        st.error(
+            f"Kolom berikut tidak ditemukan pada {table_name}: "
+            f"{', '.join(missing_columns)}"
+        )
+
+        st.info(
+            f"Kolom yang tersedia: {', '.join(data.columns)}"
+        )
+
+        st.stop()
+
+
+# ============================================================
+# MEMUAT DATA
+# ============================================================
+
 try:
-    loss_event = load_google_sheet(SHEET_GID["Loss_Event_Model"])
-    hop_harian = load_google_sheet(SHEET_GID["HOP_Harian"])
+    with st.spinner("Membaca data Google Sheet publik..."):
+        loss_data, hop_data = load_all_data()
 
 except Exception as error:
     st.error("Google Sheet publik belum berhasil dibaca.")
-    st.code(str(error))
+
+    st.exception(error)
+
+    st.info(
+        "Pastikan Google Sheet telah diatur sebagai "
+        "'Anyone with the link' dan setiap tab masih tersedia."
+    )
+
     st.stop()
 
 
-required_loss_columns = [
-    "Episode_ID",
-    "Tahun",
-    "Bulan",
-    "Regional",
-    "Unit_Asli",
-    "HOP_Unit_Key",
-    "Kategori_Final",
-    "Episode_Type",
-    "Loss_Production_MWh",
-    "Loss_Opportunity_Rp",
-    "Kesiapan_Model",
-]
-
-missing_columns = [
-    column
-    for column in required_loss_columns
-    if column not in loss_event.columns
-]
-
-if missing_columns:
-    st.error(
-        "Kolom berikut belum ditemukan pada sheet Loss_Event_Model: "
-        + ", ".join(missing_columns)
-    )
-    st.stop()
-
-
-for column in [
-    "Tahun",
-    "Jumlah_Segmen",
-    "Loss_Production_MWh",
-    "Loss_Opportunity_Rp",
-    "Nilai_HOP",
-    "Batas_HOP_P20",
-]:
-    if column in loss_event.columns:
-        loss_event[column] = clean_numeric(loss_event[column])
-
-
-if "Start_DateTime" in loss_event.columns:
-    loss_event["Start_DateTime"] = pd.to_datetime(
-        loss_event["Start_DateTime"],
-        errors="coerce",
-        dayfirst=True,
-    )
-
-if "End_DateTime" in loss_event.columns:
-    loss_event["End_DateTime"] = pd.to_datetime(
-        loss_event["End_DateTime"],
-        errors="coerce",
-        dayfirst=True,
-    )
-
-
-for column in ["Tahun", "Bulan", "Nilai_HOP"]:
-    if column in hop_harian.columns:
-        if column in ["Tahun", "Bulan", "Nilai_HOP"]:
-            hop_harian[column] = clean_numeric(hop_harian[column])
-
-if "Tanggal" in hop_harian.columns:
-    hop_harian["Tanggal"] = pd.to_datetime(
-        hop_harian["Tanggal"],
-        errors="coerce",
-        dayfirst=True,
-    )
-
-
-loss_event["Bulan_No"] = (
-    loss_event["Bulan"]
-    .astype(str)
-    .str.strip()
-    .map(MONTH_NUMBER)
+validate_required_columns(
+    loss_data,
+    [
+        LOSS_ID_COLUMN,
+        "Tahun",
+        "Regional",
+        "HOP_Unit_Key",
+        "Kategori_Final",
+        "Loss_Production_MWh",
+        "Loss_Opportunity_Rp",
+    ],
+    SHEET_LOSS,
 )
 
-loss_event["Kategori_Final"] = (
-    loss_event["Kategori_Final"]
-    .fillna("Belum Diklasifikasikan")
-    .astype(str)
-    .str.strip()
-)
-
-loss_event["Regional"] = (
-    loss_event["Regional"]
-    .fillna("Belum Teridentifikasi")
-    .astype(str)
-    .str.strip()
-)
-
-loss_event["Unit_Asli"] = (
-    loss_event["Unit_Asli"]
-    .fillna("Belum Teridentifikasi")
-    .astype(str)
-    .str.strip()
+validate_required_columns(
+    hop_data,
+    [
+        "Tanggal",
+        "HOP_Unit_Key",
+        "Nilai_HOP",
+    ],
+    SHEET_HOP,
 )
 
 
-# =========================================================
+# ============================================================
 # SIDEBAR FILTER
-# =========================================================
+# ============================================================
+
 st.sidebar.title("Filter Dashboard")
-st.sidebar.caption("Sumber: Google Sheet MODEL READY")
 
-year_options = sorted(
-    loss_event["Tahun"].dropna().astype(int).unique().tolist()
+st.sidebar.caption(
+    "Sumber data: Google Sheet publik"
 )
-
-selected_years = safe_multiselect(
-    "Tahun",
-    year_options,
-    "filter_year",
-)
-
-year_filtered = loss_event[
-    loss_event["Tahun"].isin(selected_years)
-].copy()
-
-regional_options = sorted(
-    year_filtered["Regional"].dropna().unique().tolist()
-)
-
-selected_regionals = safe_multiselect(
-    "Regional",
-    regional_options,
-    "filter_regional",
-)
-
-regional_filtered = year_filtered[
-    year_filtered["Regional"].isin(selected_regionals)
-].copy()
-
-unit_options = sorted(
-    regional_filtered["Unit_Asli"].dropna().unique().tolist()
-)
-
-selected_units = safe_multiselect(
-    "Unit",
-    unit_options,
-    "filter_unit",
-)
-
-unit_filtered = regional_filtered[
-    regional_filtered["Unit_Asli"].isin(selected_units)
-].copy()
-
-category_options = sorted(
-    unit_filtered["Kategori_Final"].dropna().unique().tolist()
-)
-
-selected_categories = safe_multiselect(
-    "Kategori Risiko",
-    category_options,
-    "filter_category",
-)
-
-filtered = unit_filtered[
-    unit_filtered["Kategori_Final"].isin(selected_categories)
-].copy()
 
 st.sidebar.divider()
-st.sidebar.caption(
-    f"{len(filtered):,} episode sesuai filter"
+
+
+available_years = sorted(
+    loss_data["Tahun"]
+    .dropna()
+    .astype(int)
+    .unique()
+    .tolist()
+)
+
+selected_years = st.sidebar.multiselect(
+    "Tahun",
+    options=available_years,
+    default=available_years,
 )
 
 
-# =========================================================
-# JUDUL DASHBOARD
-# =========================================================
+regional_options = sorted(
+    loss_data["Regional"]
+    .dropna()
+    .astype(str)
+    .unique()
+    .tolist()
+)
+
+selected_regionals = st.sidebar.multiselect(
+    "Regional",
+    options=regional_options,
+    default=regional_options,
+)
+
+
+unit_options = sorted(
+    loss_data["HOP_Unit_Key"]
+    .dropna()
+    .astype(str)
+    .unique()
+    .tolist()
+)
+
+selected_units = st.sidebar.multiselect(
+    "Unit",
+    options=unit_options,
+    default=unit_options,
+)
+
+
+category_options = sorted(
+    loss_data["Kategori_Final"]
+    .dropna()
+    .astype(str)
+    .unique()
+    .tolist()
+)
+
+selected_categories = st.sidebar.multiselect(
+    "Kategori final",
+    options=category_options,
+    default=category_options,
+)
+
+
+readiness_options = []
+
+if "Kesiapan_Model" in loss_data.columns:
+    readiness_options = sorted(
+        loss_data["Kesiapan_Model"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+selected_readiness = st.sidebar.multiselect(
+    "Kesiapan model",
+    options=readiness_options,
+    default=readiness_options,
+)
+
+
+if st.sidebar.button(
+    "Muat ulang data",
+    use_container_width=True,
+):
+    st.cache_data.clear()
+    st.rerun()
+
+
+st.sidebar.divider()
+
+st.sidebar.caption(
+    "Sumber aktif: Google Sheet Publik"
+)
+
+
+# ============================================================
+# PENERAPAN FILTER
+# ============================================================
+
+filtered = loss_data.copy()
+
+if selected_years:
+    filtered = filtered[
+        filtered["Tahun"].isin(selected_years)
+    ]
+
+if selected_regionals:
+    filtered = filtered[
+        filtered["Regional"].isin(selected_regionals)
+    ]
+
+if selected_units:
+    filtered = filtered[
+        filtered["HOP_Unit_Key"].isin(selected_units)
+    ]
+
+if selected_categories:
+    filtered = filtered[
+        filtered["Kategori_Final"].isin(selected_categories)
+    ]
+
+if (
+    selected_readiness
+    and "Kesiapan_Model" in filtered.columns
+):
+    filtered = filtered[
+        filtered["Kesiapan_Model"].isin(selected_readiness)
+    ]
+
+
+filtered_hop = hop_data.copy()
+
+if selected_years and "Tahun" in filtered_hop.columns:
+    filtered_hop = filtered_hop[
+        filtered_hop["Tahun"].isin(selected_years)
+    ]
+
+if selected_units:
+    filtered_hop = filtered_hop[
+        filtered_hop["HOP_Unit_Key"].isin(selected_units)
+    ]
+
+
+# ============================================================
+# HEADER DASHBOARD
+# ============================================================
+
 st.title("Risk Model Hambatan Energi Primer Batubara")
 
-st.markdown(
-    """
-    <div class="dashboard-note">
-        Dashboard mengolah episode loss production, loss opportunity,
-        kondisi HOP, dan kesiapan data untuk pemodelan risiko.
-    </div>
-    """,
-    unsafe_allow_html=True,
+st.caption(
+    "Pemodelan risiko berbasis Kejadian Loss, HOP harian, "
+    "frekuensi kejadian, dan severity kerugian."
 )
 
 
-if filtered.empty:
-    st.warning("Tidak ada data yang sesuai dengan kombinasi filter.")
-    st.stop()
-
-
-# =========================================================
+# ============================================================
 # KPI UTAMA
-# =========================================================
-total_episode = filtered["Episode_ID"].nunique()
+# ============================================================
 
-event_count = filtered.loc[
-    filtered["Episode_Type"].eq("EVENT"),
-    "Episode_ID",
-].nunique()
+total_loss_events = filtered[LOSS_ID_COLUMN].nunique()
 
-monthly_aggregate_count = filtered.loc[
-    filtered["Episode_Type"].eq("AGREGAT BULANAN"),
-    "Episode_ID",
-].nunique()
+total_loss_production = filtered[
+    "Loss_Production_MWh"
+].sum()
 
-total_loss_mwh = filtered["Loss_Production_MWh"].sum()
-total_loss_rp = filtered["Loss_Opportunity_Rp"].sum()
+total_loss_opportunity = filtered[
+    "Loss_Opportunity_Rp"
+].sum()
 
-daily_hop_ready = filtered.loc[
-    filtered["Kesiapan_Model"].eq("READY - HOP HARIAN"),
-    "Episode_ID",
-].nunique()
+total_hop_records = len(filtered_hop)
 
-hop_pending = filtered.loc[
-    filtered["Kesiapan_Model"].eq("LOSS READY - HOP PENDING"),
-    "Episode_ID",
-].nunique()
+average_hop = filtered_hop["Nilai_HOP"].mean()
 
 
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
 kpi1.metric(
-    "Episode Model",
-    format_number(total_episode),
-    help="Jumlah episode setelah penggabungan segmen yang berkesinambungan.",
+    "Kejadian Loss",
+    format_number(total_loss_events),
+    help=(
+        "Jumlah kejadian loss setelah segmen KKP/PLO "
+        "yang berkesinambungan digabungkan."
+    ),
 )
 
 kpi2.metric(
     "Loss Production",
-    f"{format_number(total_loss_mwh, 3)} MWh",
+    f"{format_number(total_loss_production, 3)} MWh",
 )
 
 kpi3.metric(
     "Loss Opportunity",
-    format_rupiah_short(total_loss_rp),
+    format_compact_rupiah(total_loss_opportunity),
 )
 
 kpi4.metric(
-    "Siap Analisis HOP Harian",
-    format_number(daily_hop_ready),
-    help="Episode yang memiliki pasangan data HOP pada tanggal kejadian.",
+    "Data HOP Harian",
+    format_number(total_hop_records),
+)
+
+kpi5.metric(
+    "Rata-rata HOP",
+    format_number(average_hop, 2),
 )
 
 
-st.write("")
-
-detail1, detail2, detail3 = st.columns(3)
-
-detail1.metric(
-    "Event Bertanggal",
-    format_number(event_count),
-)
-
-detail2.metric(
-    "Agregat Bulanan",
-    format_number(monthly_aggregate_count),
-)
-
-detail3.metric(
-    "Loss Menunggu Data HOP",
-    format_number(hop_pending),
-)
-
-
-if hop_pending > 0:
-    st.markdown(
-        f"""
-        <div class="quality-warning">
-            Terdapat <b>{hop_pending:,} episode</b> yang dapat digunakan
-            untuk analisis frequency–severity, tetapi belum memiliki
-            pasangan HOP harian.
-        </div>
-        """,
-        unsafe_allow_html=True,
+if filtered.empty:
+    st.warning(
+        "Tidak ada data yang sesuai dengan kombinasi filter."
     )
 
+    st.stop()
 
-# =========================================================
-# TREN BULANAN
-# =========================================================
-st.markdown(
-    '<div class="section-title">Tren Loss Production Bulanan</div>',
-    unsafe_allow_html=True,
+
+st.success(
+    f"Google Sheet publik berhasil dibaca. "
+    f"Terdapat {total_loss_events:,} kejadian loss "
+    f"sesuai filter."
 )
 
-monthly_summary = (
-    filtered.groupby(
-        ["Bulan_No", "Bulan"],
-        as_index=False,
-        observed=True,
-    )
-    .agg(
-        Episode=("Episode_ID", "nunique"),
-        Loss_Production_MWh=("Loss_Production_MWh", "sum"),
-        Loss_Opportunity_Rp=("Loss_Opportunity_Rp", "sum"),
-    )
-    .sort_values("Bulan_No")
+
+# ============================================================
+# TAB DASHBOARD
+# ============================================================
+
+tab_summary, tab_loss, tab_hop, tab_quality, tab_method = st.tabs(
+    [
+        "Ringkasan",
+        "Kejadian Loss",
+        "HOP Harian",
+        "Kualitas Data",
+        "Metodologi",
+    ]
 )
 
-fig_monthly = px.bar(
-    monthly_summary,
-    x="Bulan",
-    y="Loss_Production_MWh",
-    color="Loss_Production_MWh",
-    color_continuous_scale=[
-        [0.00, "#9DD9E5"],
-        [0.50, "#0072CE"],
-        [1.00, "#17365D"],
-    ],
-    text_auto=".3s",
-    custom_data=[
-        "Episode",
+
+# ============================================================
+# TAB RINGKASAN
+# ============================================================
+
+with tab_summary:
+    st.subheader("Ringkasan Risiko Hambatan Energi Primer")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        monthly_loss = filtered.copy()
+
+        if "Start_DateTime" in monthly_loss.columns:
+            monthly_loss["Periode"] = (
+                monthly_loss["Start_DateTime"]
+                .dt.to_period("M")
+                .astype(str)
+            )
+
+            monthly_summary = (
+                monthly_loss
+                .dropna(subset=["Periode"])
+                .groupby("Periode", as_index=False)
+                .agg(
+                    Loss_Production_MWh=(
+                        "Loss_Production_MWh",
+                        "sum",
+                    ),
+                    Jumlah_Kejadian=(
+                        LOSS_ID_COLUMN,
+                        "nunique",
+                    ),
+                )
+            )
+
+            figure_monthly = px.line(
+                monthly_summary,
+                x="Periode",
+                y="Loss_Production_MWh",
+                markers=True,
+                title="Tren Loss Production Bulanan",
+                labels={
+                    "Periode": "Periode",
+                    "Loss_Production_MWh": (
+                        "Loss Production (MWh)"
+                    ),
+                },
+                color_discrete_sequence=["#0F6CBD"],
+            )
+
+            figure_monthly.update_layout(
+                template="plotly_white",
+                height=420,
+                margin=dict(
+                    l=20,
+                    r=20,
+                    t=60,
+                    b=20,
+                ),
+            )
+
+            st.plotly_chart(
+                figure_monthly,
+                use_container_width=True,
+            )
+
+    with col2:
+        regional_summary = (
+            filtered
+            .groupby("Regional", as_index=False)
+            .agg(
+                Loss_Opportunity_Rp=(
+                    "Loss_Opportunity_Rp",
+                    "sum",
+                )
+            )
+            .sort_values(
+                "Loss_Opportunity_Rp",
+                ascending=False,
+            )
+        )
+
+        figure_regional = px.bar(
+            regional_summary,
+            x="Regional",
+            y="Loss_Opportunity_Rp",
+            title="Loss Opportunity per Regional",
+            labels={
+                "Regional": "Regional",
+                "Loss_Opportunity_Rp": (
+                    "Loss Opportunity (Rp)"
+                ),
+            },
+            color_discrete_sequence=["#00A6A6"],
+        )
+
+        figure_regional.update_layout(
+            template="plotly_white",
+            height=420,
+            margin=dict(
+                l=20,
+                r=20,
+                t=60,
+                b=20,
+            ),
+        )
+
+        st.plotly_chart(
+            figure_regional,
+            use_container_width=True,
+        )
+
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        category_summary = (
+            filtered
+            .groupby("Kategori_Final", as_index=False)
+            .agg(
+                Loss_Opportunity_Rp=(
+                    "Loss_Opportunity_Rp",
+                    "sum",
+                ),
+                Jumlah_Kejadian=(
+                    LOSS_ID_COLUMN,
+                    "nunique",
+                ),
+            )
+            .sort_values(
+                "Loss_Opportunity_Rp",
+                ascending=True,
+            )
+        )
+
+        figure_category = px.bar(
+            category_summary,
+            x="Loss_Opportunity_Rp",
+            y="Kategori_Final",
+            orientation="h",
+            title="Loss Opportunity per Kategori",
+            labels={
+                "Kategori_Final": "Kategori",
+                "Loss_Opportunity_Rp": (
+                    "Loss Opportunity (Rp)"
+                ),
+            },
+            color="Jumlah_Kejadian",
+            color_continuous_scale="Blues",
+        )
+
+        figure_category.update_layout(
+            template="plotly_white",
+            height=460,
+            margin=dict(
+                l=20,
+                r=20,
+                t=60,
+                b=20,
+            ),
+        )
+
+        st.plotly_chart(
+            figure_category,
+            use_container_width=True,
+        )
+
+    with col4:
+        unit_summary = (
+            filtered
+            .groupby("HOP_Unit_Key", as_index=False)
+            .agg(
+                Loss_Production_MWh=(
+                    "Loss_Production_MWh",
+                    "sum",
+                )
+            )
+            .sort_values(
+                "Loss_Production_MWh",
+                ascending=False,
+            )
+            .head(10)
+        )
+
+        figure_unit = px.bar(
+            unit_summary.sort_values(
+                "Loss_Production_MWh"
+            ),
+            x="Loss_Production_MWh",
+            y="HOP_Unit_Key",
+            orientation="h",
+            title="Top 10 Unit Berdasarkan Loss Production",
+            labels={
+                "HOP_Unit_Key": "Unit",
+                "Loss_Production_MWh": (
+                    "Loss Production (MWh)"
+                ),
+            },
+            color_discrete_sequence=["#F59E0B"],
+        )
+
+        figure_unit.update_layout(
+            template="plotly_white",
+            height=460,
+            margin=dict(
+                l=20,
+                r=20,
+                t=60,
+                b=20,
+            ),
+        )
+
+        st.plotly_chart(
+            figure_unit,
+            use_container_width=True,
+        )
+
+
+# ============================================================
+# TAB KEJADIAN LOSS
+# ============================================================
+
+with tab_loss:
+    st.subheader("Data Kejadian Loss")
+
+    st.caption(
+        "Satu Kejadian Loss dapat terdiri dari satu atau "
+        "beberapa segmen KKP/PLO yang berkesinambungan."
+    )
+
+    display_columns = [
+        LOSS_ID_COLUMN,
+        "Tahun",
+        "Bulan",
+        "Regional",
+        "Unit_Asli",
+        "HOP_Unit_Key",
+        "Kategori_Final",
+        "Subkategori_Event",
+        "Start_DateTime",
+        "End_DateTime",
+        "Jenis_Kejadian_Loss",
+        "Jumlah_Segmen",
+        "Loss_Production_MWh",
         "Loss_Opportunity_Rp",
-    ],
-)
+        "Nilai_HOP",
+        "Batas_HOP_P20",
+        "Status_HOP",
+        "Kesiapan_Model",
+    ]
 
-fig_monthly.update_traces(
-    hovertemplate=(
-        "<b>%{x}</b><br>"
-        "Loss Production: %{y:,.3f} MWh<br>"
-        "Episode: %{customdata[0]:,.0f}<br>"
-        "Loss Opportunity: Rp%{customdata[1]:,.0f}"
-        "<extra></extra>"
-    )
-)
+    display_columns = [
+        column
+        for column in display_columns
+        if column in filtered.columns
+    ]
 
-fig_monthly.update_layout(
-    height=430,
-    margin=dict(l=20, r=20, t=20, b=20),
-    paper_bgcolor="#FFFFFF",
-    plot_bgcolor="#FFFFFF",
-    coloraxis_showscale=False,
-    xaxis_title="Bulan",
-    yaxis_title="Loss Production (MWh)",
-    font=dict(color=PLN_NAVY),
-)
+    loss_display = filtered[
+        display_columns
+    ].copy()
 
-fig_monthly.update_xaxes(
-    showgrid=False,
-)
+    sort_columns = [
+        column
+        for column in [
+            "Start_DateTime",
+            LOSS_ID_COLUMN,
+        ]
+        if column in loss_display.columns
+    ]
 
-fig_monthly.update_yaxes(
-    gridcolor="#DCE3EC",
-    zeroline=False,
-)
-
-st.plotly_chart(
-    fig_monthly,
-    use_container_width=True,
-)
-
-
-# =========================================================
-# KATEGORI DAN REGIONAL
-# =========================================================
-chart_left, chart_right = st.columns(2)
-
-with chart_left:
-    st.markdown(
-        '<div class="section-title">Loss per Kategori Risiko</div>',
-        unsafe_allow_html=True,
-    )
-
-    category_summary = (
-        filtered.groupby(
-            "Kategori_Final",
-            as_index=False,
-            observed=True,
-        )
-        .agg(
-            Episode=("Episode_ID", "nunique"),
-            Loss_Production_MWh=("Loss_Production_MWh", "sum"),
-        )
-        .sort_values(
-            "Loss_Production_MWh",
-            ascending=True,
-        )
-    )
-
-    fig_category = px.bar(
-        category_summary,
-        x="Loss_Production_MWh",
-        y="Kategori_Final",
-        orientation="h",
-        color="Kategori_Final",
-        color_discrete_map=CATEGORY_COLORS,
-        text_auto=".3s",
-        custom_data=["Episode"],
-    )
-
-    fig_category.update_traces(
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "Loss Production: %{x:,.3f} MWh<br>"
-            "Episode: %{customdata[0]:,.0f}"
-            "<extra></extra>"
-        )
-    )
-
-    fig_category.update_layout(
-        height=440,
-        margin=dict(l=20, r=20, t=20, b=20),
-        paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF",
-        showlegend=False,
-        xaxis_title="Loss Production (MWh)",
-        yaxis_title="",
-        font=dict(color=PLN_NAVY),
-    )
-
-    fig_category.update_xaxes(
-        gridcolor="#DCE3EC",
-        zeroline=False,
-    )
-
-    fig_category.update_yaxes(
-        showgrid=False,
-    )
-
-    st.plotly_chart(
-        fig_category,
-        use_container_width=True,
-    )
-
-
-with chart_right:
-    st.markdown(
-        '<div class="section-title">Loss per Regional</div>',
-        unsafe_allow_html=True,
-    )
-
-    regional_summary = (
-        filtered.groupby(
-            "Regional",
-            as_index=False,
-            observed=True,
-        )
-        .agg(
-            Episode=("Episode_ID", "nunique"),
-            Loss_Production_MWh=("Loss_Production_MWh", "sum"),
-        )
-        .sort_values(
-            "Loss_Production_MWh",
+    if sort_columns:
+        loss_display = loss_display.sort_values(
+            sort_columns,
             ascending=False,
         )
-    )
 
-    fig_regional = px.bar(
-        regional_summary,
-        x="Regional",
-        y="Loss_Production_MWh",
-        color="Regional",
-        color_discrete_sequence=[
-            PLN_BLUE,
-            PLN_TEAL,
-            PLN_AMBER,
-        ],
-        text_auto=".3s",
-        custom_data=["Episode"],
-    )
-
-    fig_regional.update_traces(
-        hovertemplate=(
-            "<b>%{x}</b><br>"
-            "Loss Production: %{y:,.3f} MWh<br>"
-            "Episode: %{customdata[0]:,.0f}"
-            "<extra></extra>"
-        )
-    )
-
-    fig_regional.update_layout(
-        height=440,
-        margin=dict(l=20, r=20, t=20, b=20),
-        paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF",
-        showlegend=False,
-        xaxis_title="Regional",
-        yaxis_title="Loss Production (MWh)",
-        font=dict(color=PLN_NAVY),
-    )
-
-    fig_regional.update_xaxes(
-        showgrid=False,
-    )
-
-    fig_regional.update_yaxes(
-        gridcolor="#DCE3EC",
-        zeroline=False,
-    )
-
-    st.plotly_chart(
-        fig_regional,
+    st.dataframe(
+        loss_display,
         use_container_width=True,
+        hide_index=True,
+        height=620,
+        column_config={
+            LOSS_ID_COLUMN: st.column_config.TextColumn(
+                "Kejadian Loss ID",
+                width="medium",
+            ),
+            "Loss_Production_MWh": (
+                st.column_config.NumberColumn(
+                    "Loss Production MWh",
+                    format="%.3f",
+                )
+            ),
+            "Loss_Opportunity_Rp": (
+                st.column_config.NumberColumn(
+                    "Loss Opportunity Rp",
+                    format="Rp %,.0f",
+                )
+            ),
+            "Nilai_HOP": st.column_config.NumberColumn(
+                "Nilai HOP",
+                format="%.2f",
+            ),
+            "Batas_HOP_P20": (
+                st.column_config.NumberColumn(
+                    "Batas HOP P20",
+                    format="%.2f",
+                )
+            ),
+            "Start_DateTime": (
+                st.column_config.DatetimeColumn(
+                    "Waktu Mulai",
+                    format="DD-MMM-YYYY HH:mm",
+                )
+            ),
+            "End_DateTime": (
+                st.column_config.DatetimeColumn(
+                    "Waktu Selesai",
+                    format="DD-MMM-YYYY HH:mm",
+                )
+            ),
+        },
+    )
+
+    csv_loss = loss_display.to_csv(
+        index=False
+    ).encode("utf-8")
+
+    st.download_button(
+        "Unduh Kejadian Loss (CSV)",
+        data=csv_loss,
+        file_name="kejadian_loss_terfilter.csv",
+        mime="text/csv",
     )
 
 
-# =========================================================
-# PRIORITAS UNIT
-# =========================================================
-st.markdown(
-    '<div class="section-title">Prioritas Unit Berdasarkan Loss Production</div>',
-    unsafe_allow_html=True,
-)
+# ============================================================
+# TAB HOP HARIAN
+# ============================================================
 
-unit_summary = (
-    filtered.groupby(
-        ["Regional", "HOP_Unit_Key"],
-        as_index=False,
-        observed=True,
+with tab_hop:
+    st.subheader("Data HOP Harian")
+
+    hop_col1, hop_col2 = st.columns([2, 1])
+
+    with hop_col1:
+        if not filtered_hop.empty:
+            hop_trend = (
+                filtered_hop
+                .dropna(
+                    subset=[
+                        "Tanggal",
+                        "Nilai_HOP",
+                    ]
+                )
+                .groupby(
+                    "Tanggal",
+                    as_index=False,
+                )
+                .agg(
+                    Nilai_HOP=(
+                        "Nilai_HOP",
+                        "mean",
+                    )
+                )
+            )
+
+            figure_hop = px.line(
+                hop_trend,
+                x="Tanggal",
+                y="Nilai_HOP",
+                title="Tren Rata-rata HOP Harian",
+                labels={
+                    "Tanggal": "Tanggal",
+                    "Nilai_HOP": "HOP",
+                },
+                color_discrete_sequence=["#0F6CBD"],
+            )
+
+            figure_hop.update_layout(
+                template="plotly_white",
+                height=430,
+                margin=dict(
+                    l=20,
+                    r=20,
+                    t=60,
+                    b=20,
+                ),
+            )
+
+            st.plotly_chart(
+                figure_hop,
+                use_container_width=True,
+            )
+
+    with hop_col2:
+        hop_by_unit = (
+            filtered_hop
+            .groupby(
+                "HOP_Unit_Key",
+                as_index=False,
+            )
+            .agg(
+                Rata_Rata_HOP=(
+                    "Nilai_HOP",
+                    "mean",
+                ),
+                Minimum_HOP=(
+                    "Nilai_HOP",
+                    "min",
+                ),
+                Jumlah_Data=(
+                    "Nilai_HOP",
+                    "count",
+                ),
+            )
+            .sort_values(
+                "Rata_Rata_HOP",
+                ascending=True,
+            )
+        )
+
+        st.dataframe(
+            hop_by_unit,
+            use_container_width=True,
+            hide_index=True,
+            height=430,
+            column_config={
+                "Rata_Rata_HOP": (
+                    st.column_config.NumberColumn(
+                        "Rata-rata HOP",
+                        format="%.2f",
+                    )
+                ),
+                "Minimum_HOP": (
+                    st.column_config.NumberColumn(
+                        "Minimum HOP",
+                        format="%.2f",
+                    )
+                ),
+            },
+        )
+
+    st.dataframe(
+        filtered_hop,
+        use_container_width=True,
+        hide_index=True,
+        height=480,
+        column_config={
+            "Tanggal": st.column_config.DateColumn(
+                "Tanggal",
+                format="DD-MMM-YYYY",
+            ),
+            "Nilai_HOP": (
+                st.column_config.NumberColumn(
+                    "Nilai HOP",
+                    format="%.2f",
+                )
+            ),
+        },
     )
-    .agg(
-        Episode=("Episode_ID", "nunique"),
-        Loss_Production_MWh=("Loss_Production_MWh", "sum"),
-        Loss_Opportunity_Rp=("Loss_Opportunity_Rp", "sum"),
+
+
+# ============================================================
+# TAB KUALITAS DATA
+# ============================================================
+
+with tab_quality:
+    st.subheader("Kualitas dan Kesiapan Data")
+
+    readiness_count = pd.DataFrame()
+
+    if "Kesiapan_Model" in filtered.columns:
+        readiness_count = (
+            filtered["Kesiapan_Model"]
+            .fillna("BELUM DIKLASIFIKASIKAN")
+            .value_counts()
+            .rename_axis("Kesiapan_Model")
+            .reset_index(name="Jumlah_Kejadian")
+        )
+
+    if not readiness_count.empty:
+        figure_readiness = px.bar(
+            readiness_count,
+            x="Kesiapan_Model",
+            y="Jumlah_Kejadian",
+            color="Kesiapan_Model",
+            title="Status Kesiapan Data untuk Model",
+            labels={
+                "Kesiapan_Model": "Kesiapan Model",
+                "Jumlah_Kejadian": (
+                    "Jumlah Kejadian Loss"
+                ),
+            },
+        )
+
+        figure_readiness.update_layout(
+            template="plotly_white",
+            showlegend=False,
+            height=420,
+        )
+
+        st.plotly_chart(
+            figure_readiness,
+            use_container_width=True,
+        )
+
+    missing_hop = 0
+
+    if "Nilai_HOP" in filtered.columns:
+        missing_hop = filtered[
+            "Nilai_HOP"
+        ].isna().sum()
+
+    duplicate_loss_id = filtered[
+        LOSS_ID_COLUMN
+    ].duplicated().sum()
+
+    quality1, quality2, quality3 = st.columns(3)
+
+    quality1.metric(
+        "Kejadian Loss Tanpa HOP",
+        format_number(missing_hop),
     )
-    .sort_values(
-        "Loss_Production_MWh",
-        ascending=False,
+
+    quality2.metric(
+        "Duplikasi Kejadian Loss ID",
+        format_number(duplicate_loss_id),
     )
-)
 
-unit_summary.insert(
-    0,
-    "Peringkat",
-    np.arange(1, len(unit_summary) + 1),
-)
-
-unit_display = unit_summary.copy()
-
-unit_display["Loss Production MWh"] = (
-    unit_display["Loss_Production_MWh"]
-    .map(lambda value: f"{value:,.3f}")
-)
-
-unit_display["Loss Opportunity"] = (
-    unit_display["Loss_Opportunity_Rp"]
-    .map(format_rupiah_short)
-)
-
-unit_display = unit_display.rename(
-    columns={
-        "Regional": "Regional",
-        "HOP_Unit_Key": "Unit",
-        "Episode": "Jumlah Episode",
-    }
-)
-
-unit_display = unit_display[
-    [
-        "Peringkat",
-        "Regional",
-        "Unit",
-        "Jumlah Episode",
-        "Loss Production MWh",
-        "Loss Opportunity",
-    ]
-]
-
-st.dataframe(
-    unit_display,
-    use_container_width=True,
-    hide_index=True,
-    height=420,
-)
+    quality3.metric(
+        "Total Data Tersaring",
+        format_number(len(filtered)),
+    )
 
 
-# =========================================================
-# PENJELASAN SINGKAT
-# =========================================================
-with st.expander("Cara membaca halaman Ringkasan Risiko"):
+# ============================================================
+# TAB METODOLOGI
+# ============================================================
+
+with tab_method:
+    st.subheader("Metodologi Data dan Pemodelan")
+
     st.markdown(
         """
-        - **Episode Model** merupakan kelompok kejadian setelah segmen
-          yang berkesinambungan digabungkan.
-        - **Event Bertanggal** dapat digunakan untuk analisis frekuensi.
-        - **Agregat Bulanan** digunakan untuk severity dan tren, tetapi
-          tidak dianggap sebagai jumlah kejadian.
-        - **Siap Analisis HOP Harian** berarti episode mempunyai data HOP
-          pada tanggal kejadian.
-        - **Loss Menunggu Data HOP** tetap dapat digunakan untuk
-          frequency–severity, tetapi belum digunakan dalam analisis
-          hubungan HOP dengan kejadian.
-        """
+### Definisi Kejadian Loss
+
+**Kejadian Loss** adalah satu rangkaian kejadian risiko yang
+menimbulkan kehilangan produksi atau kehilangan peluang
+pendapatan.
+
+Beberapa segmen KKP/PLO yang masih merupakan satu rangkaian
+kejadian dapat digabungkan menjadi satu Kejadian Loss. Tujuannya
+adalah mencegah penghitungan frekuensi secara berlebihan atau
+*double counting*.
+
+### Struktur data
+
+1. `Loss_Event_Detail` berfungsi sebagai data rinci dan audit trail.
+2. `Loss_Event_Model` berfungsi sebagai data utama untuk pemodelan.
+3. `HOP_Harian` berisi kondisi Hari Operasi Persediaan per unit.
+4. `Kejadian_Loss_ID` menjadi identitas unik setiap Kejadian Loss.
+5. Awalan identitas menggunakan format `LOSS-TAHUN-NOMOR`.
+
+### Hubungan HOP dan Kejadian Loss
+
+Nilai HOP digunakan untuk menguji apakah penurunan persediaan
+energi primer meningkatkan kemungkinan terjadinya Kejadian Loss.
+
+Model berikutnya dapat memisahkan frekuensi kejadian berdasarkan:
+
+- HOP rendah;
+- HOP normal;
+- unit pembangkit;
+- regional;
+- kategori risiko; dan
+- periode waktu.
+
+### Pengembangan model berikutnya
+
+Data ini dapat digunakan untuk:
+
+- estimasi frekuensi Kejadian Loss;
+- distribusi severity;
+- simulasi Monte Carlo annual loss;
+- P50, P90, dan P95;
+- probability of exceedance;
+- risk heat map; dan
+- rekomendasi mitigasi berbasis HOP.
+"""
     )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "Risk Model Hambatan Energi Primer Batubara · "
+    "Sumber data Google Sheet publik"
+)
