@@ -572,6 +572,7 @@ st.success(
 
 (
     tab_summary,
+    tab_hop_loss,
     tab_loss,
     tab_hop,
     tab_quality,
@@ -579,6 +580,7 @@ st.success(
 ) = st.tabs(
     [
         "Ringkasan",
+        "Analisis HOP–Loss",
         "Kejadian Loss",
         "HOP Harian",
         "Kualitas Data",
@@ -836,7 +838,567 @@ with tab_summary:
             use_container_width=True,
         )
 
+# ============================================================
+# TAB ANALISIS HOP–LOSS
+# ============================================================
 
+with tab_hop_loss:
+    st.subheader(
+        "Analisis Hubungan HOP dan Kejadian Loss"
+    )
+
+    st.caption(
+        "Analisis membandingkan kemungkinan terjadinya "
+        "Kejadian Loss pada kondisi HOP rendah dan normal."
+    )
+
+    # --------------------------------------------------------
+    # MENYIAPKAN BATAS HOP PER UNIT
+    # --------------------------------------------------------
+
+    threshold_source = loss_data[
+        [
+            "HOP_Unit_Key",
+            "Batas_HOP_P20",
+        ]
+    ].copy()
+
+    threshold_source = threshold_source.dropna(
+        subset=[
+            "HOP_Unit_Key",
+            "Batas_HOP_P20",
+        ]
+    )
+
+    threshold_by_unit = (
+        threshold_source
+        .groupby(
+            "HOP_Unit_Key",
+            as_index=False,
+        )
+        .agg(
+            Batas_HOP_P20=(
+                "Batas_HOP_P20",
+                "median",
+            )
+        )
+    )
+
+    # --------------------------------------------------------
+    # MENYIAPKAN DATA HOP HARIAN
+    # --------------------------------------------------------
+
+    hop_analysis = filtered_hop[
+        [
+            "Tanggal",
+            "HOP_Unit_Key",
+            "Nilai_HOP",
+        ]
+    ].copy()
+
+    hop_analysis = hop_analysis.dropna(
+        subset=[
+            "Tanggal",
+            "HOP_Unit_Key",
+            "Nilai_HOP",
+        ]
+    )
+
+    hop_analysis["Tanggal"] = (
+        pd.to_datetime(
+            hop_analysis["Tanggal"],
+            errors="coerce",
+        )
+        .dt.normalize()
+    )
+
+    hop_analysis = (
+        hop_analysis
+        .groupby(
+            [
+                "Tanggal",
+                "HOP_Unit_Key",
+            ],
+            as_index=False,
+        )
+        .agg(
+            Nilai_HOP=(
+                "Nilai_HOP",
+                "mean",
+            )
+        )
+    )
+
+    hop_analysis = hop_analysis.merge(
+        threshold_by_unit,
+        on="HOP_Unit_Key",
+        how="left",
+    )
+
+    hop_analysis = hop_analysis.dropna(
+        subset=["Batas_HOP_P20"]
+    )
+
+    hop_analysis["Status_HOP_Analisis"] = (
+        "NORMAL"
+    )
+
+    hop_analysis.loc[
+        hop_analysis["Nilai_HOP"]
+        <= hop_analysis["Batas_HOP_P20"],
+        "Status_HOP_Analisis",
+    ] = "RENDAH"
+
+    # --------------------------------------------------------
+    # MENYIAPKAN KEJADIAN LOSS PER UNIT PER HARI
+    # --------------------------------------------------------
+
+    event_daily = filtered[
+        [
+            LOSS_ID_COLUMN,
+            "HOP_Unit_Key",
+            "Start_DateTime",
+            "Loss_Production_MWh",
+            "Loss_Opportunity_Rp",
+        ]
+    ].copy()
+
+    event_daily = event_daily.dropna(
+        subset=[
+            LOSS_ID_COLUMN,
+            "HOP_Unit_Key",
+            "Start_DateTime",
+        ]
+    )
+
+    event_daily["Tanggal"] = (
+        pd.to_datetime(
+            event_daily["Start_DateTime"],
+            errors="coerce",
+        )
+        .dt.normalize()
+    )
+
+    event_daily = (
+        event_daily
+        .groupby(
+            [
+                "Tanggal",
+                "HOP_Unit_Key",
+            ],
+            as_index=False,
+        )
+        .agg(
+            Jumlah_Kejadian_Loss=(
+                LOSS_ID_COLUMN,
+                "nunique",
+            ),
+            Loss_Production_MWh=(
+                "Loss_Production_MWh",
+                "sum",
+            ),
+            Loss_Opportunity_Rp=(
+                "Loss_Opportunity_Rp",
+                "sum",
+            ),
+        )
+    )
+
+    # --------------------------------------------------------
+    # MENGGABUNGKAN HOP DAN KEJADIAN LOSS
+    # --------------------------------------------------------
+
+    hop_loss_daily = hop_analysis.merge(
+        event_daily,
+        on=[
+            "Tanggal",
+            "HOP_Unit_Key",
+        ],
+        how="left",
+    )
+
+    fill_zero_columns = [
+        "Jumlah_Kejadian_Loss",
+        "Loss_Production_MWh",
+        "Loss_Opportunity_Rp",
+    ]
+
+    for column in fill_zero_columns:
+        hop_loss_daily[column] = (
+            hop_loss_daily[column]
+            .fillna(0)
+        )
+
+    hop_loss_daily["Ada_Kejadian_Loss"] = (
+        hop_loss_daily[
+            "Jumlah_Kejadian_Loss"
+        ] > 0
+    )
+
+    # --------------------------------------------------------
+    # RINGKASAN HOP RENDAH VS NORMAL
+    # --------------------------------------------------------
+
+    hop_loss_summary = (
+        hop_loss_daily
+        .groupby(
+            "Status_HOP_Analisis",
+            as_index=False,
+        )
+        .agg(
+            Observasi_Hari=(
+                "Tanggal",
+                "count",
+            ),
+            Hari_Dengan_Loss=(
+                "Ada_Kejadian_Loss",
+                "sum",
+            ),
+            Jumlah_Kejadian_Loss=(
+                "Jumlah_Kejadian_Loss",
+                "sum",
+            ),
+            Total_Loss_Production_MWh=(
+                "Loss_Production_MWh",
+                "sum",
+            ),
+            Total_Loss_Opportunity_Rp=(
+                "Loss_Opportunity_Rp",
+                "sum",
+            ),
+        )
+    )
+
+    hop_loss_summary[
+        "Probabilitas_Loss"
+    ] = (
+        hop_loss_summary[
+            "Hari_Dengan_Loss"
+        ]
+        / hop_loss_summary[
+            "Observasi_Hari"
+        ]
+    )
+
+    hop_loss_summary[
+        "Frekuensi_per_100_Hari"
+    ] = (
+        hop_loss_summary[
+            "Jumlah_Kejadian_Loss"
+        ]
+        / hop_loss_summary[
+            "Observasi_Hari"
+        ]
+        * 100
+    )
+
+    # --------------------------------------------------------
+    # NILAI KPI
+    # --------------------------------------------------------
+
+    low_row = hop_loss_summary[
+        hop_loss_summary[
+            "Status_HOP_Analisis"
+        ] == "RENDAH"
+    ]
+
+    normal_row = hop_loss_summary[
+        hop_loss_summary[
+            "Status_HOP_Analisis"
+        ] == "NORMAL"
+    ]
+
+    probability_low = (
+        low_row["Probabilitas_Loss"].iloc[0]
+        if not low_row.empty
+        else 0
+    )
+
+    probability_normal = (
+        normal_row["Probabilitas_Loss"].iloc[0]
+        if not normal_row.empty
+        else 0
+    )
+
+    low_loss_events = (
+        low_row[
+            "Jumlah_Kejadian_Loss"
+        ].iloc[0]
+        if not low_row.empty
+        else 0
+    )
+
+    normal_loss_events = (
+        normal_row[
+            "Jumlah_Kejadian_Loss"
+        ].iloc[0]
+        if not normal_row.empty
+        else 0
+    )
+
+    if probability_normal > 0:
+        relative_risk = (
+            probability_low
+            / probability_normal
+        )
+    else:
+        relative_risk = None
+
+    analysis_kpi1, analysis_kpi2, analysis_kpi3, analysis_kpi4 = (
+        st.columns(4)
+    )
+
+    analysis_kpi1.metric(
+        "Probabilitas Loss saat HOP Rendah",
+        f"{probability_low:.2%}",
+        help=(
+            "Persentase hari dengan Kejadian Loss "
+            "ketika nilai HOP berada pada atau "
+            "di bawah batas P20."
+        ),
+    )
+
+    analysis_kpi2.metric(
+        "Probabilitas Loss saat HOP Normal",
+        f"{probability_normal:.2%}",
+        help=(
+            "Persentase hari dengan Kejadian Loss "
+            "ketika nilai HOP berada di atas "
+            "batas P20."
+        ),
+    )
+
+    analysis_kpi3.metric(
+        "Relative Risk HOP Rendah",
+        (
+            f"{relative_risk:.2f}x"
+            if relative_risk is not None
+            else "-"
+        ),
+        help=(
+            "Perbandingan probabilitas loss pada "
+            "HOP rendah terhadap HOP normal."
+        ),
+    )
+
+    analysis_kpi4.metric(
+        "Kejadian Loss dengan Data HOP",
+        format_number(
+            low_loss_events
+            + normal_loss_events
+        ),
+        help=(
+            "Jumlah Kejadian Loss yang berhasil "
+            "dipasangkan dengan observasi HOP harian."
+        ),
+    )
+
+    # --------------------------------------------------------
+    # NARASI OTOMATIS
+    # --------------------------------------------------------
+
+    if relative_risk is None:
+        st.info(
+            "Relative Risk belum dapat dihitung karena "
+            "tidak terdapat Kejadian Loss pada kelompok "
+            "HOP normal atau data pembanding belum cukup."
+        )
+
+    elif relative_risk > 1:
+        st.warning(
+            f"Indikasi awal menunjukkan bahwa kemungkinan "
+            f"Kejadian Loss pada kondisi HOP rendah sekitar "
+            f"{relative_risk:.2f} kali dibandingkan kondisi "
+            f"HOP normal. Hubungan ini masih perlu diuji "
+            f"secara statistik dan divalidasi menggunakan "
+            f"periode data yang lebih panjang."
+        )
+
+    elif relative_risk < 1:
+        st.info(
+            f"Pada data terfilter, kemungkinan Kejadian Loss "
+            f"saat HOP rendah tercatat sekitar "
+            f"{relative_risk:.2f} kali dibandingkan kondisi "
+            f"HOP normal. Hasil ini belum menunjukkan "
+            f"peningkatan risiko pada HOP rendah dan perlu "
+            f"ditinjau terhadap kelengkapan data."
+        )
+
+    else:
+        st.info(
+            "Probabilitas Kejadian Loss pada kondisi HOP "
+            "rendah dan normal tercatat relatif sama."
+        )
+
+    # --------------------------------------------------------
+    # GRAFIK
+    # --------------------------------------------------------
+
+    chart_col1, chart_col2 = st.columns(2)
+
+    with chart_col1:
+        probability_chart = px.bar(
+            hop_loss_summary,
+            x="Status_HOP_Analisis",
+            y="Probabilitas_Loss",
+            color="Status_HOP_Analisis",
+            title=(
+                "Probabilitas Kejadian Loss "
+                "berdasarkan Status HOP"
+            ),
+            labels={
+                "Status_HOP_Analisis": (
+                    "Status HOP"
+                ),
+                "Probabilitas_Loss": (
+                    "Probabilitas Kejadian Loss"
+                ),
+            },
+            color_discrete_map={
+                "RENDAH": "#DC2626",
+                "NORMAL": "#16A34A",
+            },
+            text_auto=".2%",
+        )
+
+        probability_chart.update_yaxes(
+            tickformat=".1%",
+        )
+
+        probability_chart.update_layout(
+            template="plotly_white",
+            showlegend=False,
+            height=430,
+        )
+
+        st.plotly_chart(
+            probability_chart,
+            use_container_width=True,
+        )
+
+    with chart_col2:
+        frequency_chart = px.bar(
+            hop_loss_summary,
+            x="Status_HOP_Analisis",
+            y="Frekuensi_per_100_Hari",
+            color="Status_HOP_Analisis",
+            title=(
+                "Frekuensi Kejadian Loss "
+                "per 100 Hari Observasi"
+            ),
+            labels={
+                "Status_HOP_Analisis": (
+                    "Status HOP"
+                ),
+                "Frekuensi_per_100_Hari": (
+                    "Kejadian per 100 Hari"
+                ),
+            },
+            color_discrete_map={
+                "RENDAH": "#DC2626",
+                "NORMAL": "#16A34A",
+            },
+            text_auto=".2f",
+        )
+
+        frequency_chart.update_layout(
+            template="plotly_white",
+            showlegend=False,
+            height=430,
+        )
+
+        st.plotly_chart(
+            frequency_chart,
+            use_container_width=True,
+        )
+
+    # --------------------------------------------------------
+    # TABEL RINGKASAN
+    # --------------------------------------------------------
+
+    st.subheader(
+        "Ringkasan Perbandingan HOP"
+    )
+
+    st.dataframe(
+        hop_loss_summary,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Status_HOP_Analisis": (
+                st.column_config.TextColumn(
+                    "Status HOP"
+                )
+            ),
+            "Observasi_Hari": (
+                st.column_config.NumberColumn(
+                    "Observasi Unit-Hari",
+                    format="%d",
+                )
+            ),
+            "Hari_Dengan_Loss": (
+                st.column_config.NumberColumn(
+                    "Hari dengan Loss",
+                    format="%d",
+                )
+            ),
+            "Jumlah_Kejadian_Loss": (
+                st.column_config.NumberColumn(
+                    "Jumlah Kejadian Loss",
+                    format="%d",
+                )
+            ),
+            "Probabilitas_Loss": (
+                st.column_config.NumberColumn(
+                    "Probabilitas Loss",
+                    format="%.2f%%",
+                )
+            ),
+            "Frekuensi_per_100_Hari": (
+                st.column_config.NumberColumn(
+                    "Kejadian per 100 Hari",
+                    format="%.2f",
+                )
+            ),
+            "Total_Loss_Production_MWh": (
+                st.column_config.NumberColumn(
+                    "Loss Production MWh",
+                    format="%.3f",
+                )
+            ),
+            "Total_Loss_Opportunity_Rp": (
+                st.column_config.NumberColumn(
+                    "Loss Opportunity Rp",
+                    format="Rp %,.0f",
+                )
+            ),
+        },
+    )
+
+    # --------------------------------------------------------
+    # CATATAN INTERPRETASI
+    # --------------------------------------------------------
+
+    with st.expander(
+        "Cara membaca Analisis HOP–Loss"
+    ):
+        st.markdown(
+            """
+- **Probabilitas Loss** adalah proporsi observasi
+  unit-hari yang memiliki minimal satu Kejadian Loss.
+- **Frekuensi per 100 hari** menunjukkan perkiraan
+  jumlah Kejadian Loss dalam setiap 100 unit-hari.
+- **Relative Risk lebih dari 1** menunjukkan Kejadian
+  Loss relatif lebih mungkin terjadi saat HOP rendah.
+- **Relative Risk sama dengan 1** menunjukkan tingkat
+  kemungkinan yang relatif sama.
+- **Relative Risk kurang dari 1** menunjukkan data
+  aktual belum memperlihatkan kenaikan kemungkinan
+  loss pada kondisi HOP rendah.
+- Hasil ini menunjukkan hubungan statistik awal dan
+  belum otomatis membuktikan hubungan sebab-akibat.
+"""
+        )
 # ============================================================
 # TAB KEJADIAN LOSS
 # ============================================================
