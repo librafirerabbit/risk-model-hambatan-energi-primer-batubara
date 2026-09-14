@@ -36,7 +36,10 @@ try:
     hop_harian = load_google_sheet(SHEET_GID["HOP_Harian"])
 
     loss_event["Loss_Production_MWh"] = pd.to_numeric(
-        loss_event["Loss_Production_MWh"],
+        loss_event["Loss_Production_MWh"]
+        .astype(str)
+        .str.replace(",", "", regex=False)
+        .str.strip(),
         errors="coerce",
     )
 
