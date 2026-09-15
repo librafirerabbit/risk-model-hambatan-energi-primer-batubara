@@ -649,7 +649,6 @@ with tab_summary:
             )
 
             figure_monthly.update_layout(
-                template="plotly_white",
                 height=420,
                 margin=dict(
                     l=20,
@@ -702,7 +701,6 @@ with tab_summary:
         )
 
         figure_regional.update_layout(
-            template="plotly_white",
             height=420,
             margin=dict(
                 l=20,
@@ -765,7 +763,6 @@ with tab_summary:
         )
 
         figure_category.update_layout(
-            template="plotly_white",
             height=460,
             margin=dict(
                 l=20,
@@ -823,7 +820,6 @@ with tab_summary:
         )
 
         figure_unit.update_layout(
-            template="plotly_white",
             height=460,
             margin=dict(
                 l=20,
@@ -1266,7 +1262,6 @@ with tab_hop_loss:
         )
 
         probability_chart.update_layout(
-            template="plotly_white",
             showlegend=False,
             height=430,
         )
@@ -1302,7 +1297,6 @@ with tab_hop_loss:
         )
 
         frequency_chart.update_layout(
-            template="plotly_white",
             showlegend=False,
             height=430,
         )
@@ -1573,16 +1567,20 @@ with tab_hop:
 
     with hop_col1:
         if not filtered_hop.empty:
-            hop_trend = (
+            hop_chart_data = (
                 filtered_hop
                 .dropna(
                     subset=[
                         "Tanggal",
+                        "HOP_Unit_Key",
                         "Nilai_HOP",
                     ]
                 )
                 .groupby(
-                    "Tanggal",
+                    [
+                        "Tanggal",
+                        "HOP_Unit_Key",
+                    ],
                     as_index=False,
                 )
                 .agg(
@@ -1593,24 +1591,157 @@ with tab_hop:
                 )
             )
 
-            figure_hop = px.line(
-                hop_trend,
-                x="Tanggal",
-                y="Nilai_HOP",
-                title=(
-                    "Tren Rata-rata HOP Harian"
-                ),
-                labels={
-                    "Tanggal": "Tanggal",
-                    "Nilai_HOP": "HOP",
-                },
-                color_discrete_sequence=[
-                    "#0F6CBD"
-                ],
+            hop_threshold_chart = (
+                loss_data[
+                    [
+                        "HOP_Unit_Key",
+                        "Batas_HOP_P20",
+                    ]
+                ]
+                .dropna()
+                .groupby(
+                    "HOP_Unit_Key",
+                    as_index=False,
+                )
+                .agg(
+                    Batas_HOP_P20=(
+                        "Batas_HOP_P20",
+                        "median",
+                    )
+                )
             )
 
+            hop_chart_data = hop_chart_data.merge(
+                hop_threshold_chart,
+                on="HOP_Unit_Key",
+                how="left",
+            )
+
+            hop_chart_data["Status_HOP"] = "NORMAL"
+            hop_chart_data.loc[
+                hop_chart_data["Nilai_HOP"]
+                <= hop_chart_data["Batas_HOP_P20"],
+                "Status_HOP",
+            ] = "RENDAH"
+
+            chart_unit_count = (
+                hop_chart_data["HOP_Unit_Key"]
+                .nunique()
+            )
+
+            if chart_unit_count == 1:
+                chart_unit = (
+                    hop_chart_data[
+                        "HOP_Unit_Key"
+                    ].iloc[0]
+                )
+
+                figure_hop = px.line(
+                    hop_chart_data,
+                    x="Tanggal",
+                    y="Nilai_HOP",
+                    markers=True,
+                    title=f"Tren HOP Harian – {chart_unit}",
+                    labels={
+                        "Tanggal": "Tanggal",
+                        "Nilai_HOP": "HOP (hari)",
+                    },
+                    color_discrete_sequence=[
+                        "#0F6CBD"
+                    ],
+                )
+
+                threshold_value = (
+                    hop_chart_data[
+                        "Batas_HOP_P20"
+                    ].dropna()
+                )
+
+                if not threshold_value.empty:
+                    figure_hop.add_hline(
+                        y=threshold_value.iloc[0],
+                        line_dash="dash",
+                        line_color="#F59E0B",
+                        annotation_text="Batas HOP P20",
+                        annotation_position="top left",
+                    )
+
+            elif chart_unit_count <= 8:
+                figure_hop = px.line(
+                    hop_chart_data,
+                    x="Tanggal",
+                    y="Nilai_HOP",
+                    color="HOP_Unit_Key",
+                    title="Tren HOP Harian per Unit",
+                    labels={
+                        "Tanggal": "Tanggal",
+                        "Nilai_HOP": "HOP (hari)",
+                        "HOP_Unit_Key": "Unit",
+                    },
+                )
+
+            else:
+                hop_daily_average = (
+                    hop_chart_data
+                    .groupby(
+                        "Tanggal",
+                        as_index=False,
+                    )
+                    .agg(
+                        Nilai_HOP=(
+                            "Nilai_HOP",
+                            "mean",
+                        )
+                    )
+                )
+
+                figure_hop = px.line(
+                    hop_daily_average,
+                    x="Tanggal",
+                    y="Nilai_HOP",
+                    title=(
+                        "Tren Rata-rata HOP Harian "
+                        f"({chart_unit_count} Unit)"
+                    ),
+                    labels={
+                        "Tanggal": "Tanggal",
+                        "Nilai_HOP": "Rata-rata HOP (hari)",
+                    },
+                    color_discrete_sequence=[
+                        "#0F6CBD"
+                    ],
+                )
+
+            low_hop_points = hop_chart_data[
+                hop_chart_data["Status_HOP"]
+                == "RENDAH"
+            ]
+
+            if (
+                chart_unit_count <= 8
+                and not low_hop_points.empty
+            ):
+                figure_hop.add_scatter(
+                    x=low_hop_points["Tanggal"],
+                    y=low_hop_points["Nilai_HOP"],
+                    mode="markers",
+                    marker=dict(
+                        color="#DC2626",
+                        size=8,
+                        symbol="circle",
+                    ),
+                    text=low_hop_points[
+                        "HOP_Unit_Key"
+                    ],
+                    hovertemplate=(
+                        "%{text}<br>"
+                        "%{x|%d-%b-%Y}<br>"
+                        "HOP: %{y:.2f}<extra>HOP rendah</extra>"
+                    ),
+                    name="HOP ≤ P20",
+                )
+
             figure_hop.update_layout(
-                template="plotly_white",
                 height=430,
                 margin=dict(
                     l=20,
@@ -1623,7 +1754,17 @@ with tab_hop:
             st.plotly_chart(
                 figure_hop,
                 use_container_width=True,
+                theme="streamlit",
             )
+
+            if chart_unit_count > 8:
+                st.caption(
+                    "Karena lebih dari 8 unit dipilih, "
+                    "grafik menampilkan rata-rata HOP harian. "
+                    "Pilih maksimal 8 unit untuk melihat "
+                    "garis masing-masing unit dan penanda "
+                    "merah saat HOP berada di bawah P20."
+                )
 
         else:
             st.info(
@@ -1754,7 +1895,6 @@ with tab_quality:
         )
 
         figure_readiness.update_layout(
-            template="plotly_white",
             showlegend=False,
             height=420,
         )
