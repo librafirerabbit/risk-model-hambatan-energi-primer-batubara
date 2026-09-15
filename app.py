@@ -1,8 +1,13 @@
+import math
 from urllib.parse import quote
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+
+APP_VERSION = "2026.09.15-monte-carlo-v3"
 
 
 # ============================================================
@@ -573,6 +578,7 @@ st.success(
 (
     tab_summary,
     tab_hop_loss,
+    tab_monte_carlo,
     tab_loss,
     tab_hop,
     tab_quality,
@@ -581,6 +587,7 @@ st.success(
     [
         "Ringkasan",
         "Analisis HOP–Loss",
+        "Monte Carlo & BETA-PERT",
         "Kejadian Loss",
         "HOP Harian",
         "Kualitas Data",
@@ -1132,6 +1139,30 @@ with tab_hop_loss:
         else 0
     )
 
+    low_observations = (
+        int(low_row["Observasi_Hari"].iloc[0])
+        if not low_row.empty
+        else 0
+    )
+
+    normal_observations = (
+        int(normal_row["Observasi_Hari"].iloc[0])
+        if not normal_row.empty
+        else 0
+    )
+
+    low_loss_days = (
+        int(low_row["Hari_Dengan_Loss"].iloc[0])
+        if not low_row.empty
+        else 0
+    )
+
+    normal_loss_days = (
+        int(normal_row["Hari_Dengan_Loss"].iloc[0])
+        if not normal_row.empty
+        else 0
+    )
+
     if probability_normal > 0:
         relative_risk = (
             probability_low
@@ -1140,8 +1171,47 @@ with tab_hop_loss:
     else:
         relative_risk = None
 
-    analysis_kpi1, analysis_kpi2, analysis_kpi3, analysis_kpi4 = (
-        st.columns(4)
+    rr_ci_low = None
+    rr_ci_high = None
+
+    if (
+        relative_risk is not None
+        and relative_risk > 0
+        and low_loss_days > 0
+        and normal_loss_days > 0
+        and low_observations > 0
+        and normal_observations > 0
+    ):
+        rr_standard_error = math.sqrt(
+            (1 / low_loss_days)
+            - (1 / low_observations)
+            + (1 / normal_loss_days)
+            - (1 / normal_observations)
+        )
+
+        rr_ci_low = math.exp(
+            math.log(relative_risk)
+            - 1.96 * rr_standard_error
+        )
+
+        rr_ci_high = math.exp(
+            math.log(relative_risk)
+            + 1.96 * rr_standard_error
+        )
+
+    association_significant = (
+        rr_ci_low is not None
+        and rr_ci_low > 1
+    )
+
+    (
+        analysis_kpi1,
+        analysis_kpi2,
+        analysis_kpi3,
+        analysis_kpi4,
+        analysis_kpi5,
+    ) = (
+        st.columns(5)
     )
 
     analysis_kpi1.metric(
@@ -1178,7 +1248,7 @@ with tab_hop_loss:
     )
 
     analysis_kpi4.metric(
-        "Kejadian Loss dengan Data HOP",
+        "Kejadian dengan Data HOP",
         format_number(
             low_loss_events
             + normal_loss_events
@@ -1186,6 +1256,24 @@ with tab_hop_loss:
         help=(
             "Jumlah Kejadian Loss yang berhasil "
             "dipasangkan dengan observasi HOP harian."
+        ),
+    )
+
+    analysis_kpi5.metric(
+        "95% CI Relative Risk",
+        (
+            f"{rr_ci_low:.2f}–{rr_ci_high:.2f}x"
+            if (
+                rr_ci_low is not None
+                and rr_ci_high is not None
+            )
+            else "-"
+        ),
+        help=(
+            "Rentang estimasi Relative Risk dengan "
+            "tingkat keyakinan 95%. Jika seluruh "
+            "rentang berada di atas 1, asosiasi "
+            "dinilai signifikan secara statistik."
         ),
     )
 
@@ -1201,14 +1289,39 @@ with tab_hop_loss:
         )
 
     elif relative_risk > 1:
-        st.warning(
-            f"Indikasi awal menunjukkan bahwa kemungkinan "
-            f"Kejadian Loss pada kondisi HOP rendah sekitar "
-            f"{relative_risk:.2f} kali dibandingkan kondisi "
-            f"HOP normal. Hubungan ini masih perlu diuji "
-            f"secara statistik dan divalidasi menggunakan "
-            f"periode data yang lebih panjang."
-        )
+        if association_significant:
+            st.warning(
+                f"Kejadian Loss tercatat sekitar "
+                f"{relative_risk:.2f} kali lebih mungkin "
+                f"pada kondisi HOP rendah dibandingkan "
+                f"HOP normal (95% CI "
+                f"{rr_ci_low:.2f}–{rr_ci_high:.2f}). "
+                f"Rentang confidence interval seluruhnya "
+                f"berada di atas 1 sehingga asosiasi ini "
+                f"signifikan secara statistik. Hasil ini "
+                f"tetap menunjukkan asosiasi dan belum "
+                f"membuktikan hubungan sebab-akibat."
+            )
+        else:
+            ci_text = (
+                f" (95% CI {rr_ci_low:.2f}–"
+                f"{rr_ci_high:.2f})"
+                if (
+                    rr_ci_low is not None
+                    and rr_ci_high is not None
+                )
+                else ""
+            )
+
+            st.warning(
+                f"Indikasi awal menunjukkan bahwa kemungkinan "
+                f"Kejadian Loss pada kondisi HOP rendah sekitar "
+                f"{relative_risk:.2f} kali dibandingkan kondisi "
+                f"HOP normal{ci_text}. Karena confidence "
+                f"interval masih menyentuh atau melewati 1, "
+                f"asosiasi belum signifikan secara statistik "
+                f"dan masih memerlukan tambahan data."
+            )
 
     elif relative_risk < 1:
         st.info(
@@ -1389,10 +1502,511 @@ with tab_hop_loss:
 - **Relative Risk kurang dari 1** menunjukkan data
   aktual belum memperlihatkan kenaikan kemungkinan
   loss pada kondisi HOP rendah.
+- **95% Confidence Interval (CI)** menunjukkan rentang
+  ketidakpastian Relative Risk. Jika seluruh rentang
+  berada di atas 1, asosiasi dinilai signifikan secara
+  statistik pada tingkat keyakinan 95%.
 - Hasil ini menunjukkan hubungan statistik awal dan
   belum otomatis membuktikan hubungan sebab-akibat.
 """
         )
+
+
+# ============================================================
+# TAB MONTE CARLO DAN BETA-PERT
+# ============================================================
+
+with tab_monte_carlo:
+    st.subheader(
+        "Simulasi Monte Carlo Annual Loss"
+    )
+
+    st.caption(
+        "Frekuensi kejadian disimulasikan dengan distribusi "
+        "Poisson berdasarkan laju kejadian per unit-hari. "
+        "Dampak setiap kejadian disimulasikan menggunakan "
+        "distribusi BETA-PERT."
+    )
+
+    simulation_col1, simulation_col2 = st.columns(2)
+
+    with simulation_col1:
+        simulation_iterations = st.number_input(
+            "Jumlah iterasi",
+            min_value=1_000,
+            max_value=100_000,
+            value=10_000,
+            step=1_000,
+            help=(
+                "Semakin banyak iterasi, hasil semakin stabil "
+                "tetapi waktu proses menjadi lebih panjang."
+            ),
+        )
+
+    with simulation_col2:
+        random_seed = st.number_input(
+            "Random seed",
+            min_value=0,
+            max_value=999_999,
+            value=2026,
+            step=1,
+            help=(
+                "Gunakan nilai yang sama agar hasil simulasi "
+                "dapat direproduksi."
+            ),
+        )
+
+    severity_source = filtered.copy()
+
+    if "Start_DateTime" in severity_source.columns:
+        severity_source = severity_source.dropna(
+            subset=["Start_DateTime"]
+        )
+
+    severity_values = (
+        severity_source["Loss_Opportunity_Rp"]
+        .dropna()
+        .astype(float)
+    )
+
+    severity_values = severity_values[
+        severity_values > 0
+    ]
+
+    if (
+        hop_loss_daily.empty
+        or len(severity_values) < 3
+    ):
+        st.warning(
+            "Simulasi belum dapat dijalankan. Diperlukan "
+            "data HOP unit-hari dan minimal tiga Kejadian "
+            "Loss dengan nilai Loss Opportunity positif."
+        )
+
+    else:
+        # Parameter BETA-PERT menggunakan P10, P50, dan P90
+        # agar estimasi tidak terlalu dipengaruhi nilai ekstrem.
+        pert_minimum = float(
+            severity_values.quantile(0.10)
+        )
+        pert_likely = float(
+            severity_values.quantile(0.50)
+        )
+        pert_maximum = float(
+            severity_values.quantile(0.90)
+        )
+
+        if pert_maximum <= pert_minimum:
+            pert_maximum = float(
+                severity_values.max()
+            )
+
+        if pert_maximum <= pert_minimum:
+            st.warning(
+                "Rentang severity belum memadai untuk "
+                "membentuk distribusi BETA-PERT."
+            )
+        else:
+            pert_likely = min(
+                max(pert_likely, pert_minimum),
+                pert_maximum,
+            )
+
+            pert_lambda = 4.0
+            pert_alpha = 1 + pert_lambda * (
+                (pert_likely - pert_minimum)
+                / (pert_maximum - pert_minimum)
+            )
+            pert_beta = 1 + pert_lambda * (
+                (pert_maximum - pert_likely)
+                / (pert_maximum - pert_minimum)
+            )
+
+            total_observations = len(hop_loss_daily)
+            total_events_with_hop = float(
+                hop_loss_daily[
+                    "Jumlah_Kejadian_Loss"
+                ].sum()
+            )
+
+            selected_unit_count = int(
+                hop_loss_daily[
+                    "HOP_Unit_Key"
+                ].nunique()
+            )
+
+            annual_unit_days = (
+                selected_unit_count * 365
+            )
+
+            event_rate_per_unit_day = (
+                total_events_with_hop
+                / total_observations
+                if total_observations > 0
+                else 0
+            )
+
+            expected_annual_frequency = (
+                event_rate_per_unit_day
+                * annual_unit_days
+            )
+
+            rng = np.random.default_rng(
+                int(random_seed)
+            )
+
+            simulated_event_counts = rng.poisson(
+                lam=expected_annual_frequency,
+                size=int(simulation_iterations),
+            )
+
+            total_simulated_events = int(
+                simulated_event_counts.sum()
+            )
+
+            annual_losses = np.zeros(
+                int(simulation_iterations),
+                dtype=float,
+            )
+
+            if total_simulated_events > 0:
+                beta_samples = rng.beta(
+                    pert_alpha,
+                    pert_beta,
+                    size=total_simulated_events,
+                )
+
+                simulated_severities = (
+                    pert_minimum
+                    + beta_samples
+                    * (pert_maximum - pert_minimum)
+                )
+
+                event_simulation_index = np.repeat(
+                    np.arange(
+                        int(simulation_iterations)
+                    ),
+                    simulated_event_counts,
+                )
+
+                annual_losses = np.bincount(
+                    event_simulation_index,
+                    weights=simulated_severities,
+                    minlength=int(simulation_iterations),
+                )
+
+            p50_annual_loss = float(
+                np.percentile(annual_losses, 50)
+            )
+            p90_annual_loss = float(
+                np.percentile(annual_losses, 90)
+            )
+            p95_annual_loss = float(
+                np.percentile(annual_losses, 95)
+            )
+            mean_annual_loss = float(
+                np.mean(annual_losses)
+            )
+
+            (
+                monte_kpi1,
+                monte_kpi2,
+                monte_kpi3,
+                monte_kpi4,
+                monte_kpi5,
+            ) = st.columns(5)
+
+            monte_kpi1.metric(
+                "Ekspektasi Frekuensi Tahunan",
+                format_number(
+                    expected_annual_frequency,
+                    1,
+                ),
+            )
+            monte_kpi2.metric(
+                "Mean Annual Loss",
+                format_compact_rupiah(
+                    mean_annual_loss
+                ),
+            )
+            monte_kpi3.metric(
+                "P50 Annual Loss",
+                format_compact_rupiah(
+                    p50_annual_loss
+                ),
+            )
+            monte_kpi4.metric(
+                "P90 Annual Loss",
+                format_compact_rupiah(
+                    p90_annual_loss
+                ),
+            )
+            monte_kpi5.metric(
+                "P95 Annual Loss",
+                format_compact_rupiah(
+                    p95_annual_loss
+                ),
+            )
+
+            annual_loss_frame = pd.DataFrame(
+                {
+                    "Annual_Loss_Rp": annual_losses,
+                }
+            )
+
+            annual_histogram = px.histogram(
+                annual_loss_frame,
+                x="Annual_Loss_Rp",
+                nbins=50,
+                histnorm="probability density",
+                title=(
+                    "Distribusi Probabilitas "
+                    "Monte Carlo Annual Loss"
+                ),
+                labels={
+                    "Annual_Loss_Rp": (
+                        "Annual Loss (Rp)"
+                    ),
+                },
+                color_discrete_sequence=[
+                    "#00A6A6"
+                ],
+            )
+
+            percentile_lines = [
+                (p50_annual_loss, "P50", "#F59E0B"),
+                (p90_annual_loss, "P90", "#EA580C"),
+                (p95_annual_loss, "P95", "#DC2626"),
+            ]
+
+            for value, label, color in percentile_lines:
+                annual_histogram.add_vline(
+                    x=value,
+                    line_dash="dash",
+                    line_color=color,
+                    annotation_text=label,
+                    annotation_position="top",
+                )
+
+            annual_histogram.update_layout(
+                height=470,
+                margin=dict(
+                    l=20,
+                    r=20,
+                    t=70,
+                    b=20,
+                ),
+                showlegend=False,
+            )
+
+            st.plotly_chart(
+                annual_histogram,
+                use_container_width=True,
+                theme="streamlit",
+            )
+
+            sorted_losses = np.sort(annual_losses)
+            exceedance_probability = (
+                1
+                - np.arange(
+                    1,
+                    len(sorted_losses) + 1,
+                )
+                / (len(sorted_losses) + 1)
+            )
+
+            exceedance_frame = pd.DataFrame(
+                {
+                    "Annual_Loss_Rp": sorted_losses,
+                    "Probability_of_Exceedance": (
+                        exceedance_probability
+                    ),
+                }
+            )
+
+            exceedance_chart = px.line(
+                exceedance_frame,
+                x="Annual_Loss_Rp",
+                y="Probability_of_Exceedance",
+                title="Probability of Exceedance Curve",
+                labels={
+                    "Annual_Loss_Rp": (
+                        "Annual Loss (Rp)"
+                    ),
+                    "Probability_of_Exceedance": (
+                        "Probability of Exceedance"
+                    ),
+                },
+                color_discrete_sequence=[
+                    "#0F6CBD"
+                ],
+            )
+
+            exceedance_chart.update_yaxes(
+                tickformat=".0%",
+                range=[0, 1],
+            )
+            exceedance_chart.update_layout(
+                height=440,
+                margin=dict(
+                    l=20,
+                    r=20,
+                    t=70,
+                    b=20,
+                ),
+            )
+
+            st.plotly_chart(
+                exceedance_chart,
+                use_container_width=True,
+                theme="streamlit",
+            )
+
+            pert_sample_size = min(
+                int(simulation_iterations),
+                50_000,
+            )
+            pert_visual_samples = (
+                pert_minimum
+                + rng.beta(
+                    pert_alpha,
+                    pert_beta,
+                    size=pert_sample_size,
+                )
+                * (pert_maximum - pert_minimum)
+            )
+
+            pert_frame = pd.DataFrame(
+                {
+                    "Severity_Rp": pert_visual_samples,
+                }
+            )
+
+            pert_chart = px.histogram(
+                pert_frame,
+                x="Severity_Rp",
+                nbins=45,
+                histnorm="probability density",
+                title=(
+                    "Distribusi BETA-PERT Severity "
+                    "per Kejadian Loss"
+                ),
+                labels={
+                    "Severity_Rp": (
+                        "Severity per Kejadian (Rp)"
+                    ),
+                },
+                color_discrete_sequence=[
+                    "#7C3AED"
+                ],
+            )
+
+            pert_parameter_lines = [
+                (
+                    pert_minimum,
+                    "Minimum (P10)",
+                    "#16A34A",
+                ),
+                (
+                    pert_likely,
+                    "Most Likely (P50)",
+                    "#F59E0B",
+                ),
+                (
+                    pert_maximum,
+                    "Maximum (P90)",
+                    "#DC2626",
+                ),
+            ]
+
+            for value, label, color in pert_parameter_lines:
+                pert_chart.add_vline(
+                    x=value,
+                    line_dash="dash",
+                    line_color=color,
+                    annotation_text=label,
+                    annotation_position="top",
+                )
+
+            pert_chart.update_layout(
+                height=460,
+                margin=dict(
+                    l=20,
+                    r=20,
+                    t=70,
+                    b=20,
+                ),
+                showlegend=False,
+            )
+
+            st.plotly_chart(
+                pert_chart,
+                use_container_width=True,
+                theme="streamlit",
+            )
+
+            parameter_table = pd.DataFrame(
+                {
+                    "Parameter": [
+                        "Minimum severity (P10)",
+                        "Most likely severity (P50)",
+                        "Maximum severity (P90)",
+                        "Alpha BETA-PERT",
+                        "Beta BETA-PERT",
+                        "Laju kejadian per unit-hari",
+                    ],
+                    "Nilai": [
+                        format_compact_rupiah(
+                            pert_minimum
+                        ),
+                        format_compact_rupiah(
+                            pert_likely
+                        ),
+                        format_compact_rupiah(
+                            pert_maximum
+                        ),
+                        f"{pert_alpha:.4f}",
+                        f"{pert_beta:.4f}",
+                        f"{event_rate_per_unit_day:.6f}",
+                    ],
+                }
+            )
+
+            st.dataframe(
+                parameter_table,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            with st.expander(
+                "Cara membaca Monte Carlo dan BETA-PERT"
+            ):
+                st.markdown(
+                    """
+- **Histogram Monte Carlo** menunjukkan kemungkinan
+  berbagai nilai kerugian tahunan dari seluruh iterasi.
+- **P50** adalah nilai annual loss yang dilampaui oleh
+  sekitar 50% hasil simulasi.
+- **P90** adalah nilai annual loss yang dilampaui oleh
+  sekitar 10% hasil simulasi.
+- **P95** adalah nilai annual loss yang dilampaui oleh
+  sekitar 5% hasil simulasi.
+- Pada **Probability of Exceedance Curve**, sumbu Y
+  menunjukkan peluang hasil simulasi melampaui nilai
+  kerugian pada sumbu X.
+- Distribusi **BETA-PERT** menggambarkan ketidakpastian
+  severity setiap Kejadian Loss berdasarkan P10,
+  median/P50, dan P90 data aktual terfilter.
+"""
+                )
+
+            st.info(
+                "Model ini merupakan estimasi berbasis data "
+                "historis terfilter. Parameter P10–P50–P90 "
+                "digunakan untuk mengurangi dominasi outlier. "
+                "Hasil perlu divalidasi bersama pemilik risiko "
+                "sebelum digunakan sebagai batas keputusan."
+            )
 # ============================================================
 # TAB KEJADIAN LOSS
 # ============================================================
@@ -2012,5 +2626,6 @@ st.divider()
 
 st.caption(
     "Risk Model Hambatan Energi Primer Batubara · "
-    "Sumber data Google Sheet publik"
+    "Sumber data Google Sheet publik · "
+    f"Versi {APP_VERSION}"
 )
