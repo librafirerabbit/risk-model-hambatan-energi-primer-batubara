@@ -4,10 +4,11 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_VERSION = "2026.09.15-monte-carlo-v3"
+APP_VERSION = "2026.09.15-heatmap-v4"
 
 
 # ============================================================
@@ -579,6 +580,7 @@ st.success(
     tab_summary,
     tab_hop_loss,
     tab_monte_carlo,
+    tab_heatmap,
     tab_loss,
     tab_hop,
     tab_quality,
@@ -588,6 +590,7 @@ st.success(
         "Ringkasan",
         "Analisis HOP–Loss",
         "Monte Carlo & BETA-PERT",
+        "Risk Heat Map",
         "Kejadian Loss",
         "HOP Harian",
         "Kualitas Data",
@@ -1904,28 +1907,43 @@ with tab_monte_carlo:
             pert_parameter_lines = [
                 (
                     pert_minimum,
-                    "Minimum (P10)",
+                    "P10",
                     "#16A34A",
+                    1.10,
                 ),
                 (
                     pert_likely,
-                    "Most Likely (P50)",
+                    "P50",
                     "#F59E0B",
+                    1.02,
                 ),
                 (
                     pert_maximum,
-                    "Maximum (P90)",
+                    "P90",
                     "#DC2626",
+                    1.10,
                 ),
             ]
 
-            for value, label, color in pert_parameter_lines:
+            for (
+                value,
+                label,
+                color,
+                label_height,
+            ) in pert_parameter_lines:
                 pert_chart.add_vline(
                     x=value,
                     line_dash="dash",
                     line_color=color,
-                    annotation_text=label,
-                    annotation_position="top",
+                )
+                pert_chart.add_annotation(
+                    x=value,
+                    y=label_height,
+                    xref="x",
+                    yref="paper",
+                    text=label,
+                    showarrow=False,
+                    font=dict(color=color),
                 )
 
             pert_chart.update_layout(
@@ -1933,7 +1951,7 @@ with tab_monte_carlo:
                 margin=dict(
                     l=20,
                     r=20,
-                    t=70,
+                    t=95,
                     b=20,
                 ),
                 showlegend=False,
@@ -2006,6 +2024,342 @@ with tab_monte_carlo:
                 "digunakan untuk mengurangi dominasi outlier. "
                 "Hasil perlu divalidasi bersama pemilik risiko "
                 "sebelum digunakan sebagai batas keputusan."
+            )
+
+
+# ============================================================
+# TAB RISK HEAT MAP
+# ============================================================
+
+with tab_heatmap:
+    st.subheader(
+        "Risk Heat Map Hambatan Energi Primer"
+    )
+
+    st.caption(
+        "Pemetaan relatif kategori risiko berdasarkan "
+        "frekuensi Kejadian Loss dan median Loss Opportunity "
+        "pada data yang sesuai filter."
+    )
+
+    heatmap_source = filtered.copy()
+
+    if "Start_DateTime" in heatmap_source.columns:
+        heatmap_source = heatmap_source.dropna(
+            subset=["Start_DateTime"]
+        )
+
+    heatmap_source = heatmap_source.dropna(
+        subset=[
+            "Kategori_Final",
+            LOSS_ID_COLUMN,
+            "Loss_Opportunity_Rp",
+        ]
+    )
+
+    heatmap_source = heatmap_source[
+        heatmap_source["Loss_Opportunity_Rp"] > 0
+    ]
+
+    if heatmap_source.empty:
+        st.warning(
+            "Risk heat map belum dapat dibentuk karena "
+            "tidak terdapat Kejadian Loss bertanggal dengan "
+            "Loss Opportunity positif pada data terfilter."
+        )
+
+    else:
+        category_risk = (
+            heatmap_source
+            .groupby(
+                "Kategori_Final",
+                as_index=False,
+            )
+            .agg(
+                Jumlah_Kejadian=(
+                    LOSS_ID_COLUMN,
+                    "nunique",
+                ),
+                Median_Severity_Rp=(
+                    "Loss_Opportunity_Rp",
+                    "median",
+                ),
+                Total_Loss_Rp=(
+                    "Loss_Opportunity_Rp",
+                    "sum",
+                ),
+            )
+        )
+
+        category_count = len(category_risk)
+
+        if category_count == 1:
+            category_risk["Skala_Kemungkinan"] = 3
+            category_risk["Skala_Dampak"] = 3
+        else:
+            likelihood_percentile = (
+                category_risk["Jumlah_Kejadian"]
+                .rank(method="average", pct=True)
+            )
+            impact_percentile = (
+                category_risk["Median_Severity_Rp"]
+                .rank(method="average", pct=True)
+            )
+
+            category_risk["Skala_Kemungkinan"] = (
+                np.ceil(likelihood_percentile * 5)
+                .clip(1, 5)
+                .astype(int)
+            )
+            category_risk["Skala_Dampak"] = (
+                np.ceil(impact_percentile * 5)
+                .clip(1, 5)
+                .astype(int)
+            )
+
+        category_risk["Nilai_Risiko"] = (
+            category_risk["Skala_Kemungkinan"]
+            * category_risk["Skala_Dampak"]
+        )
+
+        category_risk["Level_Risiko"] = "Rendah"
+        category_risk.loc[
+            category_risk["Nilai_Risiko"].between(5, 9),
+            "Level_Risiko",
+        ] = "Moderat"
+        category_risk.loc[
+            category_risk["Nilai_Risiko"].between(10, 16),
+            "Level_Risiko",
+        ] = "Tinggi"
+        category_risk.loc[
+            category_risk["Nilai_Risiko"] >= 17,
+            "Level_Risiko",
+        ] = "Ekstrem"
+
+        category_risk = category_risk.sort_values(
+            [
+                "Nilai_Risiko",
+                "Total_Loss_Rp",
+            ],
+            ascending=False,
+        ).reset_index(drop=True)
+
+        category_risk["Kode"] = [
+            f"K{index + 1}"
+            for index in range(len(category_risk))
+        ]
+
+        risk_matrix = np.array(
+            [
+                [
+                    likelihood * impact
+                    for impact in range(1, 6)
+                ]
+                for likelihood in range(1, 6)
+            ]
+        )
+
+        risk_colorscale = [
+            [0.00, "#22C55E"],
+            [0.16, "#22C55E"],
+            [0.17, "#FACC15"],
+            [0.36, "#FACC15"],
+            [0.37, "#F97316"],
+            [0.64, "#F97316"],
+            [0.65, "#DC2626"],
+            [1.00, "#DC2626"],
+        ]
+
+        heatmap_figure = go.Figure()
+
+        heatmap_figure.add_trace(
+            go.Heatmap(
+                z=risk_matrix,
+                x=[1, 2, 3, 4, 5],
+                y=[1, 2, 3, 4, 5],
+                zmin=1,
+                zmax=25,
+                colorscale=risk_colorscale,
+                showscale=False,
+                text=risk_matrix,
+                texttemplate="%{text}",
+                textfont=dict(
+                    color="white",
+                    size=14,
+                ),
+                hovertemplate=(
+                    "Kemungkinan: %{y}<br>"
+                    "Dampak: %{x}<br>"
+                    "Nilai Risiko: %{z}<extra></extra>"
+                ),
+            )
+        )
+
+        heatmap_figure.add_trace(
+            go.Scatter(
+                x=category_risk["Skala_Dampak"],
+                y=category_risk["Skala_Kemungkinan"],
+                mode="markers+text",
+                marker=dict(
+                    size=34,
+                    color="#0F172A",
+                    line=dict(
+                        color="white",
+                        width=2,
+                    ),
+                ),
+                text=category_risk["Kode"],
+                textposition="middle center",
+                textfont=dict(
+                    color="white",
+                    size=12,
+                ),
+                customdata=category_risk[
+                    [
+                        "Kategori_Final",
+                        "Jumlah_Kejadian",
+                        "Median_Severity_Rp",
+                        "Level_Risiko",
+                    ]
+                ].to_numpy(),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Jumlah Kejadian: %{customdata[1]}<br>"
+                    "Median Severity: Rp%{customdata[2]:,.0f}<br>"
+                    "Level: %{customdata[3]}<extra></extra>"
+                ),
+                name="Kategori Risiko",
+            )
+        )
+
+        heatmap_figure.update_xaxes(
+            title="Skala Dampak",
+            tickmode="array",
+            tickvals=[1, 2, 3, 4, 5],
+            ticktext=[
+                "1 Sangat Rendah",
+                "2 Rendah",
+                "3 Sedang",
+                "4 Tinggi",
+                "5 Sangat Tinggi",
+            ],
+            range=[0.5, 5.5],
+        )
+        heatmap_figure.update_yaxes(
+            title="Skala Kemungkinan",
+            tickmode="array",
+            tickvals=[1, 2, 3, 4, 5],
+            ticktext=[
+                "1 Sangat Jarang",
+                "2 Jarang",
+                "3 Mungkin",
+                "4 Sering",
+                "5 Sangat Sering",
+            ],
+            range=[0.5, 5.5],
+        )
+        heatmap_figure.update_layout(
+            title=(
+                "Heat Map Relatif Kategori "
+                "Hambatan Energi Primer"
+            ),
+            height=650,
+            margin=dict(
+                l=120,
+                r=40,
+                t=80,
+                b=110,
+            ),
+            showlegend=False,
+        )
+
+        st.plotly_chart(
+            heatmap_figure,
+            use_container_width=True,
+            theme="streamlit",
+        )
+
+        heatmap_display = category_risk[
+            [
+                "Kode",
+                "Kategori_Final",
+                "Jumlah_Kejadian",
+                "Median_Severity_Rp",
+                "Skala_Kemungkinan",
+                "Skala_Dampak",
+                "Nilai_Risiko",
+                "Level_Risiko",
+            ]
+        ].copy()
+
+        st.dataframe(
+            heatmap_display,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Kode": st.column_config.TextColumn(
+                    "Kode"
+                ),
+                "Kategori_Final": (
+                    st.column_config.TextColumn(
+                        "Kategori Risiko"
+                    )
+                ),
+                "Jumlah_Kejadian": (
+                    st.column_config.NumberColumn(
+                        "Jumlah Kejadian",
+                        format="%d",
+                    )
+                ),
+                "Median_Severity_Rp": (
+                    st.column_config.NumberColumn(
+                        "Median Severity",
+                        format="Rp %,.0f",
+                    )
+                ),
+                "Skala_Kemungkinan": (
+                    st.column_config.NumberColumn(
+                        "Skala Kemungkinan",
+                        format="%d",
+                    )
+                ),
+                "Skala_Dampak": (
+                    st.column_config.NumberColumn(
+                        "Skala Dampak",
+                        format="%d",
+                    )
+                ),
+                "Nilai_Risiko": (
+                    st.column_config.NumberColumn(
+                        "Nilai Risiko",
+                        format="%d",
+                    )
+                ),
+                "Level_Risiko": (
+                    st.column_config.TextColumn(
+                        "Level Risiko"
+                    )
+                ),
+            },
+        )
+
+        with st.expander(
+            "Dasar perhitungan Risk Heat Map"
+        ):
+            st.markdown(
+                """
+- **Skala kemungkinan** dibentuk dari peringkat relatif
+  jumlah Kejadian Loss antar-kategori pada data terfilter.
+- **Skala dampak** dibentuk dari peringkat relatif median
+  Loss Opportunity antar-kategori pada data terfilter.
+- **Nilai risiko** adalah Skala Kemungkinan × Skala Dampak.
+- Klasifikasi awal: 1–4 Rendah, 5–9 Moderat,
+  10–16 Tinggi, dan 17–25 Ekstrem.
+- Heat map ini merupakan pembandingan relatif untuk
+  eksplorasi model. Batas skala perlu diganti dengan
+  kriteria matriks risiko korporat sebelum digunakan
+  sebagai penetapan level risiko resmi.
+"""
             )
 # ============================================================
 # TAB KEJADIAN LOSS
