@@ -1,5 +1,6 @@
 import math
 from datetime import date, timedelta
+from io import BytesIO
 from urllib.parse import quote
 
 import numpy as np
@@ -8,8 +9,27 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
 
-APP_VERSION = "2026.09.16-prediction-scenario-v12"
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+
+
+APP_VERSION = "2026.09.16-pdf-report-v13"
 
 
 # ============================================================
@@ -154,6 +174,354 @@ def edir_risk_level(score: int) -> str:
     if score <= 19:
         return "Moderate to High"
     return "High"
+
+
+def build_prime_risk_pdf(report_data: dict) -> bytes:
+    """Membentuk laporan PDF multi-halaman dari hasil dashboard."""
+
+    if not REPORTLAB_AVAILABLE:
+        raise RuntimeError(
+            "Paket reportlab belum terpasang."
+        )
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=14 * mm,
+        leftMargin=14 * mm,
+        topMargin=16 * mm,
+        bottomMargin=15 * mm,
+        title=report_data["title"],
+        author=report_data["prepared_by"],
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "PrimeTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=23,
+        leading=28,
+        textColor=colors.HexColor("#12335B"),
+        alignment=TA_LEFT,
+        spaceAfter=9,
+    )
+    subtitle_style = ParagraphStyle(
+        "PrimeSubtitle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor("#62748A"),
+        spaceAfter=12,
+    )
+    heading_style = ParagraphStyle(
+        "PrimeHeading",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=15,
+        leading=18,
+        textColor=colors.HexColor("#12335B"),
+        spaceBefore=4,
+        spaceAfter=8,
+    )
+    body_style = ParagraphStyle(
+        "PrimeBody",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor("#24364B"),
+    )
+    small_style = ParagraphStyle(
+        "PrimeSmall",
+        parent=body_style,
+        fontSize=7.5,
+        leading=10,
+    )
+
+    def page_header_footer(canvas, doc):
+        canvas.saveState()
+        page_width, page_height = landscape(A4)
+        canvas.setStrokeColor(colors.HexColor("#D7E1EC"))
+        canvas.line(
+            14 * mm,
+            page_height - 11 * mm,
+            page_width - 14 * mm,
+            page_height - 11 * mm,
+        )
+        canvas.setFont("Helvetica-Bold", 8)
+        canvas.setFillColor(colors.HexColor("#12335B"))
+        canvas.drawString(
+            14 * mm,
+            page_height - 8 * mm,
+            "PRIME-RISK | Primary Energy Risk Intelligence",
+        )
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.HexColor("#62748A"))
+        canvas.drawRightString(
+            page_width - 14 * mm,
+            8 * mm,
+            f"Halaman {doc.page} | {APP_VERSION}",
+        )
+        canvas.restoreState()
+
+    def styled_table(data, widths=None, header=True, font_size=7.5):
+        wrapped = []
+        for row_index, row in enumerate(data):
+            wrapped.append(
+                [
+                    Paragraph(
+                        str(value),
+                        small_style,
+                    )
+                    for value in row
+                ]
+            )
+        table = Table(
+            wrapped,
+            colWidths=widths,
+            repeatRows=1 if header else 0,
+            hAlign="LEFT",
+        )
+        commands = [
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.35,
+             colors.HexColor("#CAD7E6")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("FONTSIZE", (0, 0), (-1, -1), font_size),
+        ]
+        if header:
+            commands.extend(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0),
+                     colors.HexColor("#12335B")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0),
+                     "Helvetica-Bold"),
+                ]
+            )
+            if len(data) > 1:
+                commands.append(
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                     [colors.white, colors.HexColor("#F3F7FB")])
+                )
+        table.setStyle(TableStyle(commands))
+        return table
+
+    story = []
+    story.append(Spacer(1, 10 * mm))
+    story.append(Paragraph("PRIME-RISK", title_style))
+    story.append(
+        Paragraph(
+            "Primary Energy Risk Intelligence, Modelling & Evaluation",
+            heading_style,
+        )
+    )
+    story.append(
+        Paragraph(
+            report_data["title"],
+            subtitle_style,
+        )
+    )
+    cover_data = [
+        ["Parameter", "Keterangan"],
+        ["Tanggal laporan", report_data["report_date"]],
+        ["Disusun oleh", report_data["prepared_by"]],
+        ["Filter tahun", report_data["filter_years"]],
+        ["Filter unit", report_data["filter_units"]],
+        ["Risk Limit aktif", report_data["risk_limit"]],
+        ["Sumber data", "Google Sheet publik PRIME-RISK"],
+    ]
+    story.append(styled_table(cover_data, [52 * mm, 175 * mm]))
+    story.append(Spacer(1, 8 * mm))
+    story.append(
+        Paragraph(
+            "Catatan: laporan ini merupakan keluaran model berbasis data "
+            "historis dan skenario. Hasil prediksi bukan kepastian kejadian "
+            "dan perlu divalidasi bersama pemilik risiko.",
+            body_style,
+        )
+    )
+    story.append(PageBreak())
+
+    story.append(Paragraph("1. Ringkasan Eksekutif", heading_style))
+    summary_rows = [["Indikator", "Nilai"]]
+    summary_rows.extend(report_data["summary_rows"])
+    story.append(styled_table(summary_rows, [105 * mm, 95 * mm]))
+    story.append(Spacer(1, 6 * mm))
+
+    story.append(Paragraph("2. KRI dan Early Warning HOP", heading_style))
+    kri_rows = report_data.get("kri_rows", [])
+    if kri_rows:
+        story.append(
+            styled_table(
+                [["Unit", "Tanggal", "HOP", "Status", "Tren 7"]]
+                + kri_rows,
+                [80 * mm, 34 * mm, 24 * mm, 32 * mm, 28 * mm],
+            )
+        )
+    else:
+        story.append(Paragraph("Data KRI tidak tersedia.", body_style))
+    story.append(PageBreak())
+
+    story.append(Paragraph("3. Analisis HOP dan Kejadian Loss", heading_style))
+    hop_rows = report_data.get("hop_loss_rows", [])
+    if hop_rows:
+        story.append(
+            styled_table(
+                [["Status HOP", "Observasi", "Hari Loss", "Kejadian",
+                  "Probabilitas", "Loss Opportunity"]]
+                + hop_rows,
+                [38 * mm, 30 * mm, 30 * mm, 28 * mm,
+                 34 * mm, 50 * mm],
+            )
+        )
+    else:
+        story.append(Paragraph("Analisis HOP-Loss tidak tersedia.", body_style))
+    story.append(Spacer(1, 7 * mm))
+
+    story.append(Paragraph("4. Monte Carlo dan BETA-PERT", heading_style))
+    monte_rows = report_data.get("monte_rows", [])
+    if monte_rows:
+        story.append(
+            styled_table(
+                [["Parameter", "Nilai"]] + monte_rows,
+                [105 * mm, 95 * mm],
+            )
+        )
+    else:
+        story.append(Paragraph("Hasil Monte Carlo tidak tersedia.", body_style))
+    story.append(PageBreak())
+
+    story.append(Paragraph("5. Prediksi Risiko", heading_style))
+    prediction_rows = report_data.get("prediction_rows", [])
+    if prediction_rows:
+        story.append(
+            styled_table(
+                [["Parameter", "Nilai"]] + prediction_rows,
+                [105 * mm, 95 * mm],
+            )
+        )
+        story.append(Spacer(1, 6 * mm))
+
+        likelihood = report_data.get("prediction_likelihood")
+        impact = report_data.get("prediction_impact")
+        matrix = [
+            [7, 12, 17, 22, 25],
+            [4, 9, 14, 19, 24],
+            [3, 8, 13, 18, 23],
+            [2, 6, 11, 16, 21],
+            [1, 5, 10, 15, 20],
+        ]
+        matrix_data = [["", "1", "2", "3", "4", "5"]]
+        for row_number, values in enumerate(matrix):
+            likelihood_score = 5 - row_number
+            row_label = {5: "E", 4: "D", 3: "C", 2: "B", 1: "A"}[
+                likelihood_score
+            ]
+            formatted_values = []
+            for impact_score, value in enumerate(values, start=1):
+                marker = (
+                    " PRED"
+                    if likelihood_score == likelihood
+                    and impact_score == impact
+                    else ""
+                )
+                formatted_values.append(f"{value}{marker}")
+            matrix_data.append([row_label] + formatted_values)
+
+        heatmap_table = Table(
+            matrix_data,
+            colWidths=[20 * mm] + [30 * mm] * 5,
+            rowHeights=[10 * mm] * 6,
+            hAlign="LEFT",
+        )
+        heatmap_commands = [
+            ("GRID", (0, 0), (-1, -1), 0.6, colors.white),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+            ("BACKGROUND", (0, 0), (-1, 0),
+             colors.HexColor("#12335B")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("BACKGROUND", (0, 1), (0, -1),
+             colors.HexColor("#12335B")),
+            ("TEXTCOLOR", (0, 1), (0, -1), colors.white),
+        ]
+        for row_index, values in enumerate(matrix, start=1):
+            for column_index, value in enumerate(values, start=1):
+                if value <= 5:
+                    fill = "#35B24A"
+                elif value <= 10:
+                    fill = "#8DCC74"
+                elif value <= 15:
+                    fill = "#FFE31A"
+                elif value <= 19:
+                    fill = "#F5A623"
+                else:
+                    fill = "#EF503B"
+                heatmap_commands.append(
+                    ("BACKGROUND", (column_index, row_index),
+                     (column_index, row_index), colors.HexColor(fill))
+                )
+        heatmap_table.setStyle(TableStyle(heatmap_commands))
+        story.append(heatmap_table)
+        story.append(Spacer(1, 5 * mm))
+        story.append(
+            Paragraph(
+                "Rekomendasi model: "
+                + report_data.get("recommendation", "-"),
+                body_style,
+            )
+        )
+    else:
+        story.append(Paragraph("Hasil prediksi tidak tersedia.", body_style))
+    story.append(PageBreak())
+
+    story.append(Paragraph("6. Profil Kategori Risiko", heading_style))
+    category_rows = report_data.get("category_rows", [])
+    if category_rows:
+        story.append(
+            styled_table(
+                [["Kode", "Kategori", "Kejadian", "Total Loss",
+                  "% Risk Limit", "K", "D", "Nilai", "Level"]]
+                + category_rows,
+                [18 * mm, 70 * mm, 22 * mm, 40 * mm, 27 * mm,
+                 15 * mm, 15 * mm, 18 * mm, 35 * mm],
+                font_size=6.8,
+            )
+        )
+    else:
+        story.append(Paragraph("Profil kategori tidak tersedia.", body_style))
+    story.append(Spacer(1, 7 * mm))
+    story.append(Paragraph("7. Metodologi dan Batasan", heading_style))
+    story.append(
+        Paragraph(
+            "Frekuensi Kejadian Loss dimodelkan menggunakan distribusi "
+            "Poisson berdasarkan laju kejadian per unit-hari. Severity "
+            "dimodelkan menggunakan BETA-PERT dengan parameter P10, P50, "
+            "dan P90. Faktor kemungkinan menggunakan peluang minimal satu "
+            "kejadian, sedangkan faktor dampak menggunakan P90 dibandingkan "
+            "Risk Limit. Nilai risiko mengikuti matriks ED 0012.E-2024. "
+            "Kualitas prediksi bergantung pada kelengkapan, konsistensi, "
+            "dan representativitas data historis.",
+            body_style,
+        )
+    )
+
+    document.build(
+        story,
+        onFirstPage=page_header_footer,
+        onLaterPages=page_header_footer,
+    )
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
 
 
 # ============================================================
@@ -644,6 +1012,11 @@ st.success(
     f"sesuai filter."
 )
 
+# Penampung hasil antar-tab untuk laporan PDF.
+report_monte_carlo = {}
+report_prediction = {}
+report_category_risk = pd.DataFrame()
+
 
 # ============================================================
 # TAB DASHBOARD
@@ -661,6 +1034,7 @@ st.success(
     tab_hop,
     tab_quality,
     tab_method,
+    tab_report,
 ) = st.tabs(
     [
         "Ringkasan",
@@ -674,6 +1048,7 @@ st.success(
         "HOP Harian",
         "Kualitas Data",
         "Metodologi",
+        "Laporan PDF",
     ]
 )
 
@@ -2240,6 +2615,16 @@ with tab_monte_carlo:
                 if risk_limit_rp > 0
                 else 0.0
             )
+            report_monte_carlo = {
+                "expected_frequency": expected_annual_frequency,
+                "mean": mean_annual_loss,
+                "p50": p50_annual_loss,
+                "p90": p90_annual_loss,
+                "p95": p95_annual_loss,
+                "p90_ratio": p90_risk_limit_ratio,
+                "exceedance_probability": probability_above_limit,
+                "exceedance_percent": exceedance_percent,
+            }
 
             (
                 monte_kpi1,
@@ -3249,6 +3634,32 @@ with tab_prediction:
                             "tetap di atas 15 hari."
                         )
 
+                    report_prediction = {
+                        "unit": prediction_unit,
+                        "start": prediction_start,
+                        "end": prediction_end,
+                        "days": projection_days,
+                        "projected_hop": projected_hop,
+                        "status": projected_hop_status,
+                        "historical_source": history_source_label,
+                        "historical_observations": historical_observations,
+                        "historical_events": historical_events,
+                        "expected_frequency": expected_event_frequency,
+                        "probability": probability_at_least_one,
+                        "mean": prediction_mean,
+                        "p50": prediction_p50,
+                        "p90": prediction_p90,
+                        "p95": prediction_p95,
+                        "p90_ratio": impact_ratio,
+                        "exceedance_probability": prediction_exceedance,
+                        "likelihood_score": likelihood_score,
+                        "likelihood_letter": likelihood_letter,
+                        "impact_score": impact_score,
+                        "risk_score": prediction_risk_score,
+                        "risk_level": prediction_risk_level,
+                        "recommendation": recommendation,
+                    }
+
                     st.success(
                         "**Rekomendasi model:** "
                         + recommendation
@@ -3422,6 +3833,8 @@ with tab_heatmap:
             f"K{index + 1}"
             for index in range(len(category_risk))
         ]
+
+        report_category_risk = category_risk.copy()
 
         risk_colorscale = [
             [0.0000, "#35B24A"],
@@ -4539,6 +4952,338 @@ with tab_method:
         "Metodologi Data dan Pemodelan"
     )
 
+
+# ============================================================
+# TAB LAPORAN PDF
+# ============================================================
+
+with tab_report:
+    st.subheader("Laporan Lengkap PRIME-RISK")
+    st.caption(
+        "Buat PDF multi-halaman dari seluruh hasil utama "
+        "dashboard sesuai filter dan parameter aktif."
+    )
+
+    if not REPORTLAB_AVAILABLE:
+        st.error(
+            "Pembuatan PDF memerlukan paket reportlab. "
+            "Tambahkan `reportlab>=4.2,<5` pada requirements.txt, "
+            "lalu reboot aplikasi."
+        )
+    else:
+        report_input_col1, report_input_col2 = st.columns(2)
+
+        with report_input_col1:
+            report_title = st.text_input(
+                "Judul Laporan",
+                value=(
+                    "Laporan Risk Model Hambatan Energi "
+                    "Primer Batubara"
+                ),
+                key="pdf_report_title",
+            )
+
+        with report_input_col2:
+            report_prepared_by = st.text_input(
+                "Disusun oleh",
+                value="Tim Risk Management",
+                key="pdf_report_prepared_by",
+            )
+
+        st.info(
+            "PDF mencakup ringkasan eksekutif, KRI HOP, "
+            "analisis HOP-Loss, Monte Carlo, prediksi risiko, "
+            "heat map, rekomendasi, dan metodologi."
+        )
+
+        if st.button(
+            "Buat Laporan PDF Lengkap",
+            type="primary",
+            use_container_width=True,
+        ):
+            kri_report_rows = []
+            if "kri_unit" in locals() and not kri_unit.empty:
+                kri_report_source = (
+                    kri_unit.assign(
+                        _Prioritas=kri_unit["Status_KRI"].map(
+                            {
+                                "EMERGENCY": 1,
+                                "SIAGA": 2,
+                                "NORMAL": 3,
+                            }
+                        )
+                    )
+                    .sort_values(
+                    ["_Prioritas", "HOP_Terakhir"],
+                    ascending=[True, True],
+                    )
+                    .drop(columns="_Prioritas")
+                )
+                for _, row in kri_report_source.iterrows():
+                    trend_value = row["Tren_7_Observasi"]
+                    kri_report_rows.append(
+                        [
+                            row["HOP_Unit_Key"],
+                            pd.to_datetime(
+                                row["Tanggal_Terakhir"]
+                            ).strftime("%d-%b-%Y"),
+                            f"{row['HOP_Terakhir']:,.2f}",
+                            row["Status_KRI"],
+                            (
+                                f"{trend_value:+,.2f}"
+                                if pd.notna(trend_value)
+                                else "-"
+                            ),
+                        ]
+                    )
+
+            hop_report_rows = []
+            if (
+                "hop_loss_summary" in locals()
+                and not hop_loss_summary.empty
+            ):
+                for _, row in hop_loss_summary.iterrows():
+                    hop_report_rows.append(
+                        [
+                            row["Status_HOP_Analisis"],
+                            f"{int(row['Observasi_Hari']):,}",
+                            f"{int(row['Hari_Dengan_Loss']):,}",
+                            f"{row['Jumlah_Kejadian_Loss']:,.0f}",
+                            f"{row['Probabilitas_Loss']:.2%}",
+                            format_compact_rupiah(
+                                row[
+                                    "Total_Loss_Opportunity_Rp"
+                                ]
+                            ),
+                        ]
+                    )
+
+            monte_report_rows = []
+            if report_monte_carlo:
+                monte_report_rows = [
+                    [
+                        "Ekspektasi frekuensi tahunan",
+                        f"{report_monte_carlo['expected_frequency']:,.2f}",
+                    ],
+                    [
+                        "Mean annual loss",
+                        format_compact_rupiah(
+                            report_monte_carlo["mean"]
+                        ),
+                    ],
+                    [
+                        "P50 annual loss",
+                        format_compact_rupiah(
+                            report_monte_carlo["p50"]
+                        ),
+                    ],
+                    [
+                        "P90 annual loss",
+                        format_compact_rupiah(
+                            report_monte_carlo["p90"]
+                        ),
+                    ],
+                    [
+                        "P95 annual loss",
+                        format_compact_rupiah(
+                            report_monte_carlo["p95"]
+                        ),
+                    ],
+                    [
+                        "P90 terhadap Risk Limit",
+                        f"{report_monte_carlo['p90_ratio']:.2%}",
+                    ],
+                    [
+                        (
+                            "Peluang loss melampaui "
+                            f"{report_monte_carlo['exceedance_percent']}% "
+                            "Risk Limit"
+                        ),
+                        (
+                            f"{report_monte_carlo['exceedance_probability']:.2%}"
+                        ),
+                    ],
+                ]
+
+            prediction_report_rows = []
+            if report_prediction:
+                prediction_report_rows = [
+                    ["Unit", report_prediction["unit"]],
+                    [
+                        "Periode",
+                        (
+                            f"{report_prediction['start']:%d-%b-%Y} "
+                            f"s.d. {report_prediction['end']:%d-%b-%Y}"
+                        ),
+                    ],
+                    [
+                        "Durasi",
+                        f"{report_prediction['days']:,} hari kalender",
+                    ],
+                    [
+                        "Proyeksi HOP",
+                        (
+                            f"{report_prediction['projected_hop']:,.2f} hari "
+                            f"({report_prediction['status']})"
+                        ),
+                    ],
+                    [
+                        "Ekspektasi kejadian",
+                        f"{report_prediction['expected_frequency']:,.2f}",
+                    ],
+                    [
+                        "Peluang minimal satu kejadian",
+                        f"{report_prediction['probability']:.2%}",
+                    ],
+                    [
+                        "P50 predicted loss",
+                        format_compact_rupiah(
+                            report_prediction["p50"]
+                        ),
+                    ],
+                    [
+                        "P90 predicted loss",
+                        format_compact_rupiah(
+                            report_prediction["p90"]
+                        ),
+                    ],
+                    [
+                        "P95 predicted loss",
+                        format_compact_rupiah(
+                            report_prediction["p95"]
+                        ),
+                    ],
+                    [
+                        "Faktor kemungkinan",
+                        (
+                            f"{report_prediction['likelihood_letter']} "
+                            f"({report_prediction['likelihood_score']})"
+                        ),
+                    ],
+                    [
+                        "Faktor dampak",
+                        str(report_prediction["impact_score"]),
+                    ],
+                    [
+                        "Nilai dan level risiko",
+                        (
+                            f"{report_prediction['risk_score']} - "
+                            f"{report_prediction['risk_level']}"
+                        ),
+                    ],
+                ]
+
+            category_report_rows = []
+            if not report_category_risk.empty:
+                for _, row in report_category_risk.iterrows():
+                    category_report_rows.append(
+                        [
+                            row["Kode"],
+                            row["Kategori_Final"],
+                            f"{row['Jumlah_Kejadian']:,.0f}",
+                            format_compact_rupiah(
+                                row["Total_Loss_Rp"]
+                            ),
+                            f"{row['Rasio_Risk_Limit']:.2%}",
+                            str(int(row["Skala_Kemungkinan"])),
+                            str(int(row["Skala_Dampak"])),
+                            str(int(row["Nilai_Risiko"])),
+                            row["Level_Risiko"],
+                        ]
+                    )
+
+            report_payload = {
+                "title": report_title,
+                "prepared_by": report_prepared_by,
+                "report_date": date.today().strftime("%d-%b-%Y"),
+                "filter_years": (
+                    ", ".join(map(str, selected_years))
+                    if selected_years
+                    else "Semua tahun"
+                ),
+                "filter_units": (
+                    ", ".join(selected_units)
+                    if selected_units
+                    else "Semua unit"
+                ),
+                "risk_limit": format_compact_rupiah(
+                    risk_limit_rp
+                ),
+                "summary_rows": [
+                    ["Jumlah Kejadian Loss", f"{total_loss_events:,}"],
+                    [
+                        "Loss Production",
+                        f"{total_loss_production:,.3f} MWh",
+                    ],
+                    [
+                        "Loss Opportunity",
+                        format_compact_rupiah(
+                            total_loss_opportunity
+                        ),
+                    ],
+                    [
+                        "Total data HOP",
+                        f"{total_hop_records:,}",
+                    ],
+                    [
+                        "Data HOP sesuai filter",
+                        f"{filtered_hop_records:,}",
+                    ],
+                ],
+                "kri_rows": kri_report_rows,
+                "hop_loss_rows": hop_report_rows,
+                "monte_rows": monte_report_rows,
+                "prediction_rows": prediction_report_rows,
+                "prediction_likelihood": (
+                    report_prediction.get("likelihood_score")
+                    if report_prediction
+                    else None
+                ),
+                "prediction_impact": (
+                    report_prediction.get("impact_score")
+                    if report_prediction
+                    else None
+                ),
+                "recommendation": (
+                    report_prediction.get("recommendation", "-")
+                    if report_prediction
+                    else "-"
+                ),
+                "category_rows": category_report_rows,
+            }
+
+            try:
+                st.session_state["prime_risk_pdf"] = (
+                    build_prime_risk_pdf(report_payload)
+                )
+                st.session_state["prime_risk_pdf_name"] = (
+                    "PRIME_RISK_Report_"
+                    + date.today().strftime("%Y%m%d")
+                    + ".pdf"
+                )
+                st.success(
+                    "Laporan PDF berhasil dibuat."
+                )
+            except Exception as report_error:
+                st.error(
+                    "Laporan belum berhasil dibuat: "
+                    + str(report_error)
+                )
+
+        if st.session_state.get("prime_risk_pdf"):
+            st.download_button(
+                "Unduh Laporan PDF",
+                data=st.session_state["prime_risk_pdf"],
+                file_name=st.session_state.get(
+                    "prime_risk_pdf_name",
+                    "PRIME_RISK_Report.pdf",
+                ),
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True,
+            )
+
+with tab_method:
     st.markdown(
         """
 ### Identitas model
