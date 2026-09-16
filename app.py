@@ -29,7 +29,12 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.16-pdf-header-fix-v14"
+APP_VERSION = "2026.09.16-rolling-backtesting-v15"
+
+PLOTLY_CONFIG = {
+    "displaylogo": False,
+    "responsive": True,
+}
 
 
 # ============================================================
@@ -4111,6 +4116,248 @@ with tab_heatmap:
 # TAB VALIDASI MODEL
 # ============================================================
 
+
+def classify_backtest_hop(value):
+    """Klasifikasi KRI HOP untuk validasi prediksi."""
+    if pd.isna(value):
+        return "TIDAK TERSEDIA"
+    if value < 10:
+        return "EMERGENCY / MERAH"
+    if value <= 15:
+        return "SIAGA / KUNING"
+    return "NORMAL / HIJAU"
+
+
+def safe_backtest_error(actual, predicted):
+    """Absolute percentage error tanpa pembagian nol."""
+    if pd.isna(actual) or pd.isna(predicted) or actual == 0:
+        return np.nan
+    return abs(float(actual) - float(predicted)) / abs(float(actual)) * 100
+
+
+def prepare_backtest_sources(loss_source, hop_source):
+    """Menyiapkan data EVENT dan HOP untuk rolling backtesting."""
+    loss_bt = loss_source.copy()
+    hop_bt = hop_source.copy()
+
+    if "Start_DateTime" not in loss_bt.columns:
+        raise ValueError("Kolom Start_DateTime tidak ditemukan.")
+    if "Tanggal" not in hop_bt.columns:
+        raise ValueError("Kolom Tanggal pada HOP_Harian tidak ditemukan.")
+
+    loss_bt["_Tanggal_BT"] = pd.to_datetime(
+        loss_bt["Start_DateTime"], errors="coerce"
+    )
+    hop_bt["_Tanggal_BT"] = pd.to_datetime(
+        hop_bt["Tanggal"], errors="coerce"
+    )
+
+    if "Jenis_Kejadian_Loss" in loss_bt.columns:
+        loss_bt = loss_bt.loc[
+            loss_bt["Jenis_Kejadian_Loss"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .eq("EVENT")
+        ].copy()
+
+    loss_bt["Loss_Opportunity_Rp"] = pd.to_numeric(
+        loss_bt["Loss_Opportunity_Rp"], errors="coerce"
+    )
+    hop_bt["Nilai_HOP"] = pd.to_numeric(
+        hop_bt["Nilai_HOP"], errors="coerce"
+    )
+
+    loss_bt = loss_bt.dropna(
+        subset=["_Tanggal_BT", "HOP_Unit_Key", "Loss_Opportunity_Rp"]
+    )
+    hop_bt = hop_bt.dropna(
+        subset=["_Tanggal_BT", "HOP_Unit_Key", "Nilai_HOP"]
+    )
+    loss_bt = loss_bt.loc[loss_bt["Loss_Opportunity_Rp"] >= 0].copy()
+
+    loss_bt["_Bulan_BT"] = (
+        loss_bt["_Tanggal_BT"].dt.to_period("M").dt.to_timestamp()
+    )
+    hop_bt["_Bulan_BT"] = (
+        hop_bt["_Tanggal_BT"].dt.to_period("M").dt.to_timestamp()
+    )
+    return loss_bt, hop_bt
+
+
+def simulate_backtest_loss(
+    expected_frequency,
+    minimum_severity,
+    likely_severity,
+    maximum_severity,
+    iterations,
+    rng,
+):
+    """Compound Poisson–BETA-PERT untuk satu periode pengujian."""
+    event_counts = rng.poisson(
+        max(float(expected_frequency), 0.0), size=int(iterations)
+    )
+    total_losses = np.zeros(int(iterations), dtype=float)
+
+    if maximum_severity <= minimum_severity:
+        maximum_severity = minimum_severity + 1.0
+    likely_severity = float(
+        np.clip(likely_severity, minimum_severity, maximum_severity)
+    )
+    pert_lambda = 4.0
+    alpha = 1 + pert_lambda * (
+        (likely_severity - minimum_severity)
+        / (maximum_severity - minimum_severity)
+    )
+    beta = 1 + pert_lambda * (
+        (maximum_severity - likely_severity)
+        / (maximum_severity - minimum_severity)
+    )
+
+    for index, count in enumerate(event_counts):
+        if count <= 0:
+            continue
+        samples = minimum_severity + rng.beta(
+            alpha, beta, size=int(count)
+        ) * (maximum_severity - minimum_severity)
+        total_losses[index] = samples.sum()
+
+    return event_counts, total_losses
+
+
+def run_monthly_backtest(
+    loss_source,
+    hop_source,
+    selected_unit,
+    maximum_folds,
+    iterations,
+    random_seed,
+):
+    """Rolling-origin bulanan tanpa data leakage."""
+    loss_bt, hop_bt = prepare_backtest_sources(loss_source, hop_source)
+
+    if selected_unit != "Seluruh Unit":
+        loss_bt = loss_bt.loc[
+            loss_bt["HOP_Unit_Key"].astype(str).eq(selected_unit)
+        ].copy()
+        hop_bt = hop_bt.loc[
+            hop_bt["HOP_Unit_Key"].astype(str).eq(selected_unit)
+        ].copy()
+
+    if hop_bt.empty:
+        return pd.DataFrame(), "Data HOP tidak tersedia."
+
+    monthly_coverage = (
+        hop_bt.groupby("_Bulan_BT")
+        .agg(Tanggal_Akhir=("_Tanggal_BT", "max"))
+        .reset_index()
+        .sort_values("_Bulan_BT")
+    )
+    monthly_coverage["Akhir_Bulan"] = (
+        monthly_coverage["_Bulan_BT"]
+        .dt.to_period("M")
+        .dt.to_timestamp("M")
+    )
+    complete_months = monthly_coverage.loc[
+        monthly_coverage["Tanggal_Akhir"]
+        >= monthly_coverage["Akhir_Bulan"],
+        "_Bulan_BT",
+    ].tolist()
+
+    if len(complete_months) < 3:
+        return pd.DataFrame(), "Minimal diperlukan tiga bulan HOP lengkap."
+
+    test_months = complete_months[2:][-int(maximum_folds):]
+    rng = np.random.default_rng(int(random_seed))
+    results = []
+
+    for test_month in test_months:
+        test_start = pd.Timestamp(test_month)
+        test_end = test_start.to_period("M").to_timestamp("M")
+        train_loss = loss_bt.loc[loss_bt["_Tanggal_BT"] < test_start].copy()
+        actual_loss = loss_bt.loc[
+            loss_bt["_Tanggal_BT"].between(test_start, test_end)
+        ].copy()
+        train_hop = hop_bt.loc[hop_bt["_Tanggal_BT"] < test_start].copy()
+        actual_hop = hop_bt.loc[
+            hop_bt["_Tanggal_BT"].between(test_start, test_end)
+        ].copy()
+
+        if train_loss.empty:
+            continue
+
+        first_month = train_loss["_Tanggal_BT"].min().to_period("M")
+        last_month = (test_start - pd.Timedelta(days=1)).to_period("M")
+        training_months = last_month.ordinal - first_month.ordinal + 1
+        if training_months <= 0:
+            continue
+
+        expected_frequency = len(train_loss) / training_months
+        severity = train_loss["Loss_Opportunity_Rp"].dropna().astype(float)
+        severity = severity.loc[severity >= 0]
+        if severity.empty:
+            continue
+
+        minimum_severity = float(severity.quantile(0.10))
+        likely_severity = float(severity.quantile(0.50))
+        maximum_severity = float(severity.quantile(0.90))
+        event_sim, loss_sim = simulate_backtest_loss(
+            expected_frequency,
+            minimum_severity,
+            likely_severity,
+            maximum_severity,
+            iterations,
+            rng,
+        )
+
+        actual_frequency = int(len(actual_loss))
+        actual_total_loss = float(actual_loss["Loss_Opportunity_Rp"].sum())
+        p50_loss = float(np.quantile(loss_sim, 0.50))
+        p90_loss = float(np.quantile(loss_sim, 0.90))
+        p95_loss = float(np.quantile(loss_sim, 0.95))
+
+        lookback_start = test_start - pd.Timedelta(days=30)
+        projected_hop_data = train_hop.loc[
+            train_hop["_Tanggal_BT"] >= lookback_start, "Nilai_HOP"
+        ]
+        projected_hop = (
+            float(projected_hop_data.mean())
+            if not projected_hop_data.empty else np.nan
+        )
+        actual_hop_mean = (
+            float(actual_hop["Nilai_HOP"].mean())
+            if not actual_hop.empty else np.nan
+        )
+        predicted_kri = classify_backtest_hop(projected_hop)
+        actual_kri = classify_backtest_hop(actual_hop_mean)
+
+        results.append(
+            {
+                "Periode_Uji": test_start,
+                "Frekuensi_Aktual": actual_frequency,
+                "Frekuensi_Prediksi": expected_frequency,
+                "P50_Frekuensi": float(np.quantile(event_sim, 0.50)),
+                "P90_Frekuensi": float(np.quantile(event_sim, 0.90)),
+                "Loss_Aktual": actual_total_loss,
+                "P50_Loss": p50_loss,
+                "P90_Loss": p90_loss,
+                "P95_Loss": p95_loss,
+                "Error_P50_Pct": safe_backtest_error(actual_total_loss, p50_loss),
+                "Actual_Percentile": float(np.mean(loss_sim <= actual_total_loss) * 100),
+                "P90_Covered": actual_total_loss <= p90_loss,
+                "HOP_Proyeksi": projected_hop,
+                "HOP_Aktual": actual_hop_mean,
+                "KRI_Prediksi": predicted_kri,
+                "KRI_Aktual": actual_kri,
+                "KRI_Akurat": predicted_kri == actual_kri,
+            }
+        )
+
+    result = pd.DataFrame(results)
+    if result.empty:
+        return result, "Tidak ada periode yang dapat diuji."
+    return result, "Backtesting berhasil dijalankan."
+
 with tab_validation:
     st.subheader(
         "Validasi Awal PRIME-RISK"
@@ -4409,6 +4656,282 @@ with tab_validation:
   risiko.
 """
         )
+
+    st.divider()
+    st.subheader("Rolling Backtesting Temporal")
+    st.caption(
+        "Model dilatih hanya dengan data sebelum bulan uji, "
+        "kemudian prediksi dibandingkan dengan realisasi. "
+        "Frekuensi memakai Poisson, severity memakai BETA-PERT, "
+        "dan total loss dibentuk melalui Monte Carlo."
+    )
+
+    try:
+        backtest_loss_source, backtest_hop_source = prepare_backtest_sources(
+            loss_data, hop_data
+        )
+        backtest_units = sorted(
+            set(
+                backtest_loss_source["HOP_Unit_Key"]
+                .dropna().astype(str).unique()
+            )
+            & set(
+                backtest_hop_source["HOP_Unit_Key"]
+                .dropna().astype(str).unique()
+            )
+        )
+
+        bt_col1, bt_col2, bt_col3, bt_col4 = st.columns(4)
+        with bt_col1:
+            backtest_unit = st.selectbox(
+                "Unit Backtesting",
+                ["Seluruh Unit"] + backtest_units,
+                key="backtest_unit_v15",
+            )
+        with bt_col2:
+            backtest_folds = st.number_input(
+                "Maksimum Periode Uji",
+                min_value=1,
+                max_value=12,
+                value=6,
+                step=1,
+                key="backtest_folds_v15",
+            )
+        with bt_col3:
+            backtest_iterations = st.number_input(
+                "Iterasi Backtesting",
+                min_value=1_000,
+                max_value=50_000,
+                value=10_000,
+                step=1_000,
+                key="backtest_iterations_v15",
+            )
+        with bt_col4:
+            backtest_seed = st.number_input(
+                "Random Seed Backtesting",
+                min_value=1,
+                max_value=999_999,
+                value=2026,
+                step=1,
+                key="backtest_seed_v15",
+            )
+
+        if st.button(
+            "Jalankan Rolling Backtesting",
+            type="primary",
+            use_container_width=True,
+            key="run_backtest_v15",
+        ):
+            with st.spinner("Menjalankan validasi temporal..."):
+                backtest_result, backtest_message = run_monthly_backtest(
+                    loss_data,
+                    hop_data,
+                    backtest_unit,
+                    int(backtest_folds),
+                    int(backtest_iterations),
+                    int(backtest_seed),
+                )
+
+            if backtest_result.empty:
+                st.warning(backtest_message)
+            else:
+                valid_errors = (
+                    backtest_result["Error_P50_Pct"]
+                    .replace([np.inf, -np.inf], np.nan)
+                    .dropna()
+                )
+                mean_error = (
+                    float(valid_errors.mean())
+                    if not valid_errors.empty else np.nan
+                )
+                p90_coverage = float(
+                    backtest_result["P90_Covered"].mean() * 100
+                )
+                frequency_mae = float(
+                    np.mean(
+                        np.abs(
+                            backtest_result["Frekuensi_Aktual"]
+                            - backtest_result["Frekuensi_Prediksi"]
+                        )
+                    )
+                )
+                valid_kri = backtest_result.loc[
+                    backtest_result["KRI_Aktual"] != "TIDAK TERSEDIA"
+                ]
+                kri_accuracy = (
+                    float(valid_kri["KRI_Akurat"].mean() * 100)
+                    if not valid_kri.empty else np.nan
+                )
+
+                metric_bt1, metric_bt2, metric_bt3, metric_bt4 = st.columns(4)
+                metric_bt1.metric(
+                    "Rata-rata Error P50",
+                    f"{mean_error:,.2f}%" if not pd.isna(mean_error) else "-",
+                )
+                metric_bt2.metric("P90 Coverage", f"{p90_coverage:,.2f}%")
+                metric_bt3.metric("Frequency MAE", f"{frequency_mae:,.2f}")
+                metric_bt4.metric(
+                    "Akurasi KRI HOP",
+                    f"{kri_accuracy:,.2f}%" if not pd.isna(kri_accuracy) else "-",
+                )
+
+                if not pd.isna(mean_error) and mean_error <= 20 and p90_coverage >= 80:
+                    st.success("Status backtesting: BAIK / LAYAK.")
+                elif not pd.isna(mean_error) and mean_error <= 35 and p90_coverage >= 60:
+                    st.warning("Status backtesting: CUKUP / LAYAK DENGAN KALIBRASI.")
+                elif not pd.isna(mean_error) and mean_error <= 50:
+                    st.warning("Status backtesting: PERLU KALIBRASI.")
+                else:
+                    st.error("Status backtesting: LEMAH / PERLU PENGEMBANGAN.")
+
+                plot_backtest = backtest_result.sort_values("Periode_Uji").copy()
+                plot_backtest["Periode"] = plot_backtest[
+                    "Periode_Uji"
+                ].dt.strftime("%b %Y")
+
+                backtest_loss_chart = go.Figure()
+                backtest_loss_chart.add_trace(
+                    go.Scatter(
+                        x=plot_backtest["Periode"],
+                        y=plot_backtest["Loss_Aktual"],
+                        mode="lines+markers",
+                        name="Loss Aktual",
+                        line=dict(color="#111827", width=3),
+                    )
+                )
+                backtest_loss_chart.add_trace(
+                    go.Scatter(
+                        x=plot_backtest["Periode"],
+                        y=plot_backtest["P50_Loss"],
+                        mode="lines+markers",
+                        name="P50 Prediksi",
+                        line=dict(color="#F59E0B", width=2, dash="dash"),
+                    )
+                )
+                backtest_loss_chart.add_trace(
+                    go.Scatter(
+                        x=plot_backtest["Periode"],
+                        y=plot_backtest["P90_Loss"],
+                        mode="lines+markers",
+                        name="P90 Prediksi",
+                        line=dict(color="#EF4444", width=2, dash="dot"),
+                    )
+                )
+                backtest_loss_chart.update_layout(
+                    title="Backtesting Total Loss — Aktual vs Prediksi",
+                    xaxis_title="Periode Uji",
+                    yaxis_title="Loss Opportunity (Rp)",
+                    hovermode="x unified",
+                    height=480,
+                    margin=dict(l=20, r=20, t=60, b=20),
+                    legend=dict(orientation="h", y=1.10),
+                )
+                st.plotly_chart(
+                    backtest_loss_chart,
+                    use_container_width=True,
+                    config=PLOTLY_CONFIG,
+                )
+
+                backtest_frequency_chart = go.Figure()
+                backtest_frequency_chart.add_trace(
+                    go.Bar(
+                        x=plot_backtest["Periode"],
+                        y=plot_backtest["Frekuensi_Aktual"],
+                        name="Frekuensi Aktual",
+                        marker_color="#2563EB",
+                    )
+                )
+                backtest_frequency_chart.add_trace(
+                    go.Scatter(
+                        x=plot_backtest["Periode"],
+                        y=plot_backtest["Frekuensi_Prediksi"],
+                        mode="lines+markers",
+                        name="Ekspektasi Poisson",
+                        line=dict(color="#DC2626", width=3),
+                    )
+                )
+                backtest_frequency_chart.update_layout(
+                    title="Backtesting Frekuensi Kejadian Loss",
+                    xaxis_title="Periode Uji",
+                    yaxis_title="Jumlah Kejadian",
+                    height=430,
+                    margin=dict(l=20, r=20, t=60, b=20),
+                    legend=dict(orientation="h", y=1.12),
+                )
+                st.plotly_chart(
+                    backtest_frequency_chart,
+                    use_container_width=True,
+                    config=PLOTLY_CONFIG,
+                )
+
+                backtest_display = backtest_result.copy()
+                backtest_display["Periode Uji"] = backtest_display[
+                    "Periode_Uji"
+                ].dt.strftime("%b %Y")
+                st.dataframe(
+                    backtest_display[
+                        [
+                            "Periode Uji",
+                            "Frekuensi_Aktual",
+                            "Frekuensi_Prediksi",
+                            "Loss_Aktual",
+                            "P50_Loss",
+                            "P90_Loss",
+                            "Error_P50_Pct",
+                            "Actual_Percentile",
+                            "P90_Covered",
+                            "HOP_Proyeksi",
+                            "HOP_Aktual",
+                            "KRI_Prediksi",
+                            "KRI_Aktual",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Frekuensi_Aktual": st.column_config.NumberColumn(
+                            "Frekuensi Aktual", format="%d"
+                        ),
+                        "Frekuensi_Prediksi": st.column_config.NumberColumn(
+                            "Frekuensi Prediksi", format="%.2f"
+                        ),
+                        "Loss_Aktual": st.column_config.NumberColumn(
+                            "Loss Aktual", format="Rp %,.0f"
+                        ),
+                        "P50_Loss": st.column_config.NumberColumn(
+                            "P50 Prediksi", format="Rp %,.0f"
+                        ),
+                        "P90_Loss": st.column_config.NumberColumn(
+                            "P90 Prediksi", format="Rp %,.0f"
+                        ),
+                        "Error_P50_Pct": st.column_config.NumberColumn(
+                            "Error P50", format="%.2f%%"
+                        ),
+                        "Actual_Percentile": st.column_config.NumberColumn(
+                            "Actual Percentile", format="%.2f%%"
+                        ),
+                        "HOP_Proyeksi": st.column_config.NumberColumn(
+                            "HOP Proyeksi", format="%.2f"
+                        ),
+                        "HOP_Aktual": st.column_config.NumberColumn(
+                            "HOP Aktual", format="%.2f"
+                        ),
+                    },
+                )
+
+                with st.expander("Dasar dan keterbatasan backtesting"):
+                    st.markdown(
+                        """
+- Pembagian training dan validation dilakukan berdasarkan waktu.
+- Baris `AGREGAT BULANAN` tidak dihitung sebagai kejadian individual.
+- Frekuensi disimulasikan dengan Poisson dan severity dengan BETA-PERT.
+- HOP proyeksi memakai rata-rata 30 hari sebelum bulan uji.
+- Bulan HOP yang belum lengkap tidak dijadikan periode uji.
+- Hasil merupakan validasi internal awal, bukan validasi independen.
+"""
+                    )
+    except Exception as backtest_error:
+        st.error(f"Rolling backtesting gagal dijalankan: {backtest_error}")
 # ============================================================
 # TAB KEJADIAN LOSS
 # ============================================================
