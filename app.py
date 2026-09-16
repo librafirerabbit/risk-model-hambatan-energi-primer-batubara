@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_VERSION = "2026.09.16-kri-fixed-v10"
+APP_VERSION = "2026.09.16-dynamic-risk-limit-v11"
 
 
 # ============================================================
@@ -86,6 +86,20 @@ def format_compact_rupiah(value) -> str:
         )
 
     return f"Rp{value:,.0f}"
+
+
+def impact_score_from_risk_limit_ratio(ratio: float) -> int:
+    """Mengubah rasio loss terhadap Risk Limit menjadi skala 1–5."""
+
+    if ratio <= 0.20:
+        return 1
+    if ratio <= 0.40:
+        return 2
+    if ratio <= 0.60:
+        return 3
+    if ratio <= 0.80:
+        return 4
+    return 5
 
 
 # ============================================================
@@ -1867,6 +1881,120 @@ with tab_monte_carlo:
         "distribusi BETA-PERT."
     )
 
+    # --------------------------------------------------------
+    # RISK LIMIT DINAMIS
+    # --------------------------------------------------------
+
+    risk_limit_series = pd.Series(dtype=float)
+
+    if "Risk_Limit_Rp" in filtered.columns:
+        risk_limit_series = pd.to_numeric(
+            filtered["Risk_Limit_Rp"],
+            errors="coerce",
+        ).dropna()
+
+        risk_limit_series = risk_limit_series[
+            risk_limit_series > 0
+        ]
+
+    risk_limit_from_data = (
+        float(risk_limit_series.max())
+        if not risk_limit_series.empty
+        else 0.0
+    )
+
+    if "manual_risk_limit_miliar" not in st.session_state:
+        st.session_state.manual_risk_limit_miliar = (
+            risk_limit_from_data / 1_000_000_000
+            if risk_limit_from_data > 0
+            else 1_000.0
+        )
+
+    with st.expander(
+        "⚙️ Pengaturan Risk Limit",
+        expanded=True,
+    ):
+        available_limit_modes = ["Input manual"]
+
+        if risk_limit_from_data > 0:
+            available_limit_modes.insert(
+                0,
+                "Gunakan nilai dari data",
+            )
+
+        risk_limit_mode = st.radio(
+            "Sumber Risk Limit",
+            options=available_limit_modes,
+            horizontal=True,
+            key="risk_limit_mode",
+        )
+
+        if risk_limit_mode == "Gunakan nilai dari data":
+            risk_limit_rp = risk_limit_from_data
+            risk_limit_miliar = (
+                risk_limit_rp / 1_000_000_000
+            )
+
+            st.caption(
+                "Risk Limit diambil dari nilai maksimum "
+                "kolom Risk_Limit_Rp pada data terfilter."
+            )
+        else:
+            risk_limit_miliar = st.number_input(
+                "Risk Limit (Rp miliar)",
+                min_value=0.01,
+                value=float(
+                    st.session_state[
+                        "manual_risk_limit_miliar"
+                    ]
+                ),
+                step=10.0,
+                format="%.2f",
+                help=(
+                    "Contoh: 1,600 berarti Risk Limit "
+                    "sebesar Rp1.60 triliun."
+                ),
+                key="manual_risk_limit_input",
+            )
+
+            st.session_state.manual_risk_limit_miliar = (
+                risk_limit_miliar
+            )
+            risk_limit_rp = (
+                risk_limit_miliar * 1_000_000_000
+            )
+
+        exceedance_percent = st.slider(
+            "Batas Probability of Exceedance "
+            "(% Risk Limit)",
+            min_value=5,
+            max_value=100,
+            value=20,
+            step=5,
+            help=(
+                "Peluang dihitung terhadap annual loss "
+                "yang melampaui persentase Risk Limit ini."
+            ),
+            key="risk_limit_exceedance_percent",
+        )
+
+        exceedance_ratio = exceedance_percent / 100
+        exceedance_limit_rp = (
+            risk_limit_rp * exceedance_ratio
+        )
+
+        risk_limit_col1, risk_limit_col2 = st.columns(2)
+
+        risk_limit_col1.metric(
+            "Risk Limit Aktif",
+            format_compact_rupiah(risk_limit_rp),
+        )
+        risk_limit_col2.metric(
+            "Batas Exceedance Aktif",
+            format_compact_rupiah(exceedance_limit_rp),
+            help=f"{exceedance_percent}% dari Risk Limit",
+        )
+
     simulation_col1, simulation_col2 = st.columns(2)
 
     with simulation_col1:
@@ -2046,6 +2174,16 @@ with tab_monte_carlo:
             mean_annual_loss = float(
                 np.mean(annual_losses)
             )
+            probability_above_limit = float(
+                np.mean(
+                    annual_losses > exceedance_limit_rp
+                )
+            )
+            p90_risk_limit_ratio = (
+                p90_annual_loss / risk_limit_rp
+                if risk_limit_rp > 0
+                else 0.0
+            )
 
             (
                 monte_kpi1,
@@ -2087,6 +2225,25 @@ with tab_monte_carlo:
                 ),
             )
 
+            limit_kpi1, limit_kpi2, limit_kpi3 = (
+                st.columns(3)
+            )
+            limit_kpi1.metric(
+                "Risk Limit Aktif",
+                format_compact_rupiah(risk_limit_rp),
+            )
+            limit_kpi2.metric(
+                "P90 terhadap Risk Limit",
+                f"{p90_risk_limit_ratio:.2%}",
+            )
+            limit_kpi3.metric(
+                (
+                    "Peluang Loss > "
+                    f"{exceedance_percent}% Risk Limit"
+                ),
+                f"{probability_above_limit:.2%}",
+            )
+
             annual_loss_frame = pd.DataFrame(
                 {
                     "Annual_Loss_Rp": annual_losses,
@@ -2126,6 +2283,16 @@ with tab_monte_carlo:
                     annotation_text=label,
                     annotation_position="top",
                 )
+
+            annual_histogram.add_vline(
+                x=exceedance_limit_rp,
+                line_dash="dot",
+                line_color="#111827",
+                annotation_text=(
+                    f"{exceedance_percent}% Risk Limit"
+                ),
+                annotation_position="bottom right",
+            )
 
             annual_histogram.update_layout(
                 height=470,
@@ -2184,6 +2351,15 @@ with tab_monte_carlo:
             exceedance_chart.update_yaxes(
                 tickformat=".0%",
                 range=[0, 1],
+            )
+            exceedance_chart.add_vline(
+                x=exceedance_limit_rp,
+                line_dash="dot",
+                line_color="#111827",
+                annotation_text=(
+                    f"Batas {exceedance_percent}% Risk Limit"
+                ),
+                annotation_position="top right",
             )
             exceedance_chart.update_layout(
                 height=440,
@@ -2373,9 +2549,16 @@ with tab_heatmap:
     )
 
     st.caption(
-        "Pemetaan relatif kategori risiko berdasarkan "
-        "frekuensi Kejadian Loss dan median Loss Opportunity "
-        "pada data yang sesuai filter."
+        "Skala kemungkinan dibentuk dari frekuensi relatif "
+        "Kejadian Loss. Skala dampak dihitung dari total "
+        "Loss Opportunity terhadap Risk Limit aktif."
+    )
+
+    st.info(
+        "Risk Limit aktif: "
+        f"**{format_compact_rupiah(risk_limit_rp)}**. "
+        "Ubah nilainya melalui tab Monte Carlo & BETA-PERT; "
+        "heat map akan dihitung ulang secara otomatis."
     )
 
     heatmap_source = filtered.copy()
@@ -2431,14 +2614,9 @@ with tab_heatmap:
 
         if category_count == 1:
             category_risk["Skala_Kemungkinan"] = 3
-            category_risk["Skala_Dampak"] = 3
         else:
             likelihood_percentile = (
                 category_risk["Jumlah_Kejadian"]
-                .rank(method="average", pct=True)
-            )
-            impact_percentile = (
-                category_risk["Median_Severity_Rp"]
                 .rank(method="average", pct=True)
             )
 
@@ -2447,11 +2625,19 @@ with tab_heatmap:
                 .clip(1, 5)
                 .astype(int)
             )
-            category_risk["Skala_Dampak"] = (
-                np.ceil(impact_percentile * 5)
-                .clip(1, 5)
-                .astype(int)
-            )
+
+        category_risk["Rasio_Risk_Limit"] = (
+            category_risk["Total_Loss_Rp"]
+            / risk_limit_rp
+        )
+        category_risk["Persen_Risk_Limit"] = (
+            category_risk["Rasio_Risk_Limit"] * 100
+        )
+        category_risk["Skala_Dampak"] = (
+            category_risk["Rasio_Risk_Limit"]
+            .apply(impact_score_from_risk_limit_ratio)
+            .astype(int)
+        )
 
         # Nilai matriks mengikuti Gambar 3 Peta Risiko pada
         # 0012.E-2024 Edir Juknis Perencanaan Manajemen
@@ -2589,6 +2775,7 @@ with tab_heatmap:
                         "Kategori_Final",
                         "Jumlah_Kejadian",
                         "Median_Severity_Rp",
+                        "Rasio_Risk_Limit",
                         "Level_Risiko",
                     ]
                 ].to_numpy(),
@@ -2596,7 +2783,8 @@ with tab_heatmap:
                     "<b>%{customdata[0]}</b><br>"
                     "Jumlah Kejadian: %{customdata[1]}<br>"
                     "Median Severity: Rp%{customdata[2]:,.0f}<br>"
-                    "Level: %{customdata[3]}<extra></extra>"
+                    "% Risk Limit: %{customdata[3]:.2%}<br>"
+                    "Level: %{customdata[4]}<extra></extra>"
                 ),
                 name="Kategori Risiko",
             )
@@ -2674,6 +2862,7 @@ with tab_heatmap:
                 "Kategori_Final",
                 "Jumlah_Kejadian",
                 "Median_Severity_Rp",
+                "Persen_Risk_Limit",
                 "Skala_Kemungkinan",
                 "Skala_Dampak",
                 "Nilai_Risiko",
@@ -2704,6 +2893,12 @@ with tab_heatmap:
                     st.column_config.NumberColumn(
                         "Median Severity",
                         format="Rp %,.0f",
+                    )
+                ),
+                "Persen_Risk_Limit": (
+                    st.column_config.NumberColumn(
+                        "% Risk Limit",
+                        format="%.2f%%",
                     )
                 ),
                 "Skala_Kemungkinan": (
@@ -2739,8 +2934,10 @@ with tab_heatmap:
                 """
 - **Skala kemungkinan** dibentuk dari peringkat relatif
   jumlah Kejadian Loss antar-kategori pada data terfilter.
-- **Skala dampak** dibentuk dari peringkat relatif median
-  Loss Opportunity antar-kategori pada data terfilter.
+- **Skala dampak** menggunakan total Loss Opportunity
+  kategori terhadap Risk Limit aktif: sampai 20% = 1,
+  20–40% = 2, 40–60% = 3, 60–80% = 4, dan di atas
+  80% = 5.
 - **Nilai risiko** mengikuti posisi matriks pada Gambar 3
   Peta Risiko dalam 0012.E-2024 Edir Juknis Perencanaan
   Manajemen Risiko Terintegrasi.
