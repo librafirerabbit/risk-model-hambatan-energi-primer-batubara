@@ -1,4 +1,5 @@
 import math
+from datetime import date, timedelta
 from urllib.parse import quote
 
 import numpy as np
@@ -8,7 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_VERSION = "2026.09.16-kri-fixed-v10"
+APP_VERSION = "2026.09.16-prediction-scenario-v12"
 
 
 # ============================================================
@@ -86,6 +87,73 @@ def format_compact_rupiah(value) -> str:
         )
 
     return f"Rp{value:,.0f}"
+
+
+def impact_score_from_risk_limit_ratio(ratio: float) -> int:
+    """Mengubah rasio loss terhadap Risk Limit menjadi skala 1–5."""
+
+    if ratio <= 0.20:
+        return 1
+    if ratio <= 0.40:
+        return 2
+    if ratio <= 0.60:
+        return 3
+    if ratio <= 0.80:
+        return 4
+    return 5
+
+
+def likelihood_score_from_probability(probability: float) -> int:
+    """Mengubah probabilitas menjadi skala kemungkinan 1–5."""
+
+    if probability <= 0.05:
+        return 1
+    if probability <= 0.20:
+        return 2
+    if probability <= 0.50:
+        return 3
+    if probability <= 0.80:
+        return 4
+    return 5
+
+
+EDIR_RISK_SCORE = {
+    (1, 1): 1, (2, 1): 5, (3, 1): 10,
+    (4, 1): 15, (5, 1): 20,
+    (1, 2): 2, (2, 2): 6, (3, 2): 11,
+    (4, 2): 16, (5, 2): 21,
+    (1, 3): 3, (2, 3): 8, (3, 3): 13,
+    (4, 3): 18, (5, 3): 23,
+    (1, 4): 4, (2, 4): 9, (3, 4): 14,
+    (4, 4): 19, (5, 4): 24,
+    (1, 5): 7, (2, 5): 12, (3, 5): 17,
+    (4, 5): 22, (5, 5): 25,
+}
+
+
+def edir_risk_score(
+    impact_score: int,
+    likelihood_score: int,
+) -> int:
+    """Nilai risiko sesuai matriks ED 0012.E-2024."""
+
+    return EDIR_RISK_SCORE[
+        (int(impact_score), int(likelihood_score))
+    ]
+
+
+def edir_risk_level(score: int) -> str:
+    """Mengubah nilai matriks menjadi level risiko."""
+
+    if score <= 5:
+        return "Low"
+    if score <= 10:
+        return "Low to Moderate"
+    if score <= 15:
+        return "Moderate"
+    if score <= 19:
+        return "Moderate to High"
+    return "High"
 
 
 # ============================================================
@@ -586,6 +654,7 @@ st.success(
     tab_kri,
     tab_hop_loss,
     tab_monte_carlo,
+    tab_prediction,
     tab_heatmap,
     tab_validation,
     tab_loss,
@@ -598,6 +667,7 @@ st.success(
         "KRI & Early Warning",
         "Analisis HOP–Loss",
         "Monte Carlo & BETA-PERT",
+        "Prediksi Risiko",
         "Risk Heat Map",
         "Validasi Model",
         "Kejadian Loss",
@@ -1867,6 +1937,120 @@ with tab_monte_carlo:
         "distribusi BETA-PERT."
     )
 
+    # --------------------------------------------------------
+    # RISK LIMIT DINAMIS
+    # --------------------------------------------------------
+
+    risk_limit_series = pd.Series(dtype=float)
+
+    if "Risk_Limit_Rp" in filtered.columns:
+        risk_limit_series = pd.to_numeric(
+            filtered["Risk_Limit_Rp"],
+            errors="coerce",
+        ).dropna()
+
+        risk_limit_series = risk_limit_series[
+            risk_limit_series > 0
+        ]
+
+    risk_limit_from_data = (
+        float(risk_limit_series.max())
+        if not risk_limit_series.empty
+        else 0.0
+    )
+
+    if "manual_risk_limit_miliar" not in st.session_state:
+        st.session_state.manual_risk_limit_miliar = (
+            risk_limit_from_data / 1_000_000_000
+            if risk_limit_from_data > 0
+            else 1_000.0
+        )
+
+    with st.expander(
+        "⚙️ Pengaturan Risk Limit",
+        expanded=True,
+    ):
+        available_limit_modes = ["Input manual"]
+
+        if risk_limit_from_data > 0:
+            available_limit_modes.insert(
+                0,
+                "Gunakan nilai dari data",
+            )
+
+        risk_limit_mode = st.radio(
+            "Sumber Risk Limit",
+            options=available_limit_modes,
+            horizontal=True,
+            key="risk_limit_mode",
+        )
+
+        if risk_limit_mode == "Gunakan nilai dari data":
+            risk_limit_rp = risk_limit_from_data
+            risk_limit_miliar = (
+                risk_limit_rp / 1_000_000_000
+            )
+
+            st.caption(
+                "Risk Limit diambil dari nilai maksimum "
+                "kolom Risk_Limit_Rp pada data terfilter."
+            )
+        else:
+            risk_limit_miliar = st.number_input(
+                "Risk Limit (Rp miliar)",
+                min_value=0.01,
+                value=float(
+                    st.session_state[
+                        "manual_risk_limit_miliar"
+                    ]
+                ),
+                step=10.0,
+                format="%.2f",
+                help=(
+                    "Contoh: 1,600 berarti Risk Limit "
+                    "sebesar Rp1.60 triliun."
+                ),
+                key="manual_risk_limit_input",
+            )
+
+            st.session_state.manual_risk_limit_miliar = (
+                risk_limit_miliar
+            )
+            risk_limit_rp = (
+                risk_limit_miliar * 1_000_000_000
+            )
+
+        exceedance_percent = st.slider(
+            "Batas Probability of Exceedance "
+            "(% Risk Limit)",
+            min_value=5,
+            max_value=100,
+            value=20,
+            step=5,
+            help=(
+                "Peluang dihitung terhadap annual loss "
+                "yang melampaui persentase Risk Limit ini."
+            ),
+            key="risk_limit_exceedance_percent",
+        )
+
+        exceedance_ratio = exceedance_percent / 100
+        exceedance_limit_rp = (
+            risk_limit_rp * exceedance_ratio
+        )
+
+        risk_limit_col1, risk_limit_col2 = st.columns(2)
+
+        risk_limit_col1.metric(
+            "Risk Limit Aktif",
+            format_compact_rupiah(risk_limit_rp),
+        )
+        risk_limit_col2.metric(
+            "Batas Exceedance Aktif",
+            format_compact_rupiah(exceedance_limit_rp),
+            help=f"{exceedance_percent}% dari Risk Limit",
+        )
+
     simulation_col1, simulation_col2 = st.columns(2)
 
     with simulation_col1:
@@ -2046,6 +2230,16 @@ with tab_monte_carlo:
             mean_annual_loss = float(
                 np.mean(annual_losses)
             )
+            probability_above_limit = float(
+                np.mean(
+                    annual_losses > exceedance_limit_rp
+                )
+            )
+            p90_risk_limit_ratio = (
+                p90_annual_loss / risk_limit_rp
+                if risk_limit_rp > 0
+                else 0.0
+            )
 
             (
                 monte_kpi1,
@@ -2087,6 +2281,25 @@ with tab_monte_carlo:
                 ),
             )
 
+            limit_kpi1, limit_kpi2, limit_kpi3 = (
+                st.columns(3)
+            )
+            limit_kpi1.metric(
+                "Risk Limit Aktif",
+                format_compact_rupiah(risk_limit_rp),
+            )
+            limit_kpi2.metric(
+                "P90 terhadap Risk Limit",
+                f"{p90_risk_limit_ratio:.2%}",
+            )
+            limit_kpi3.metric(
+                (
+                    "Peluang Loss > "
+                    f"{exceedance_percent}% Risk Limit"
+                ),
+                f"{probability_above_limit:.2%}",
+            )
+
             annual_loss_frame = pd.DataFrame(
                 {
                     "Annual_Loss_Rp": annual_losses,
@@ -2126,6 +2339,16 @@ with tab_monte_carlo:
                     annotation_text=label,
                     annotation_position="top",
                 )
+
+            annual_histogram.add_vline(
+                x=exceedance_limit_rp,
+                line_dash="dot",
+                line_color="#111827",
+                annotation_text=(
+                    f"{exceedance_percent}% Risk Limit"
+                ),
+                annotation_position="bottom right",
+            )
 
             annual_histogram.update_layout(
                 height=470,
@@ -2184,6 +2407,15 @@ with tab_monte_carlo:
             exceedance_chart.update_yaxes(
                 tickformat=".0%",
                 range=[0, 1],
+            )
+            exceedance_chart.add_vline(
+                x=exceedance_limit_rp,
+                line_dash="dot",
+                line_color="#111827",
+                annotation_text=(
+                    f"Batas {exceedance_percent}% Risk Limit"
+                ),
+                annotation_position="top right",
             )
             exceedance_chart.update_layout(
                 height=440,
@@ -2364,6 +2596,680 @@ with tab_monte_carlo:
 
 
 # ============================================================
+# TAB PREDIKSI RISIKO
+# ============================================================
+
+with tab_prediction:
+    st.subheader(
+        "Prediksi Risiko Hambatan Energi Primer"
+    )
+
+    st.caption(
+        "Simulasi looking-forward berbasis skenario HOP, "
+        "laju Kejadian Loss historis, distribusi BETA-PERT, "
+        "dan Risk Limit aktif."
+    )
+
+    prediction_history = hop_loss_daily.copy()
+
+    prediction_history["Status_KRI_HOP"] = "NORMAL"
+    prediction_history.loc[
+        prediction_history["Nilai_HOP"] < 10,
+        "Status_KRI_HOP",
+    ] = "EMERGENCY"
+    prediction_history.loc[
+        prediction_history["Nilai_HOP"].between(
+            10,
+            15,
+            inclusive="both",
+        ),
+        "Status_KRI_HOP",
+    ] = "SIAGA"
+
+    prediction_units = sorted(
+        prediction_history["HOP_Unit_Key"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    if not prediction_units:
+        st.warning(
+            "Prediksi belum dapat dijalankan karena tidak "
+            "tersedia observasi HOP unit-hari."
+        )
+    else:
+        latest_hop_date = pd.to_datetime(
+            prediction_history["Tanggal"],
+            errors="coerce",
+        ).max()
+
+        default_prediction_start = (
+            latest_hop_date.date() + timedelta(days=1)
+            if pd.notna(latest_hop_date)
+            else date.today()
+        )
+        default_prediction_end = (
+            default_prediction_start + timedelta(days=89)
+        )
+
+        input_col1, input_col2, input_col3 = st.columns(3)
+
+        with input_col1:
+            prediction_unit = st.selectbox(
+                "Unit Prediksi",
+                options=prediction_units,
+                key="prediction_unit",
+            )
+
+        with input_col2:
+            prediction_start = st.date_input(
+                "Tanggal Awal Prediksi",
+                value=default_prediction_start,
+                key="prediction_start_date",
+            )
+
+        with input_col3:
+            prediction_end = st.date_input(
+                "Tanggal Akhir Prediksi",
+                value=default_prediction_end,
+                key="prediction_end_date",
+            )
+
+        if prediction_end < prediction_start:
+            st.error(
+                "Tanggal akhir tidak boleh lebih awal "
+                "daripada tanggal awal prediksi."
+            )
+        else:
+            projection_days = (
+                prediction_end - prediction_start
+            ).days + 1
+
+            parameter_col1, parameter_col2 = st.columns(2)
+
+            with parameter_col1:
+                projected_hop = st.number_input(
+                    "Proyeksi HOP (hari)",
+                    min_value=0.0,
+                    max_value=90.0,
+                    value=12.0,
+                    step=0.5,
+                    format="%.2f",
+                    help=(
+                        "Nilai HOP yang diperkirakan berlaku "
+                        "pada periode prediksi."
+                    ),
+                    key="projected_hop",
+                )
+
+            with parameter_col2:
+                prediction_iterations = st.number_input(
+                    "Iterasi Prediksi",
+                    min_value=1_000,
+                    max_value=100_000,
+                    value=10_000,
+                    step=1_000,
+                    key="prediction_iterations",
+                )
+
+            if projected_hop < 10:
+                projected_hop_status = "EMERGENCY"
+                projected_status_color = "#DC2626"
+                projected_status_label = "Emergency / Merah"
+            elif projected_hop <= 15:
+                projected_hop_status = "SIAGA"
+                projected_status_color = "#EAB308"
+                projected_status_label = "Siaga / Kuning"
+            else:
+                projected_hop_status = "NORMAL"
+                projected_status_color = "#16A34A"
+                projected_status_label = "Normal / Hijau"
+
+            status_history = prediction_history[
+                (
+                    prediction_history["HOP_Unit_Key"]
+                    == prediction_unit
+                )
+                & (
+                    prediction_history["Status_KRI_HOP"]
+                    == projected_hop_status
+                )
+            ].copy()
+
+            history_source_label = (
+                f"{prediction_unit} – "
+                f"{projected_hop_status}"
+            )
+
+            if len(status_history) < 30:
+                status_history = prediction_history[
+                    prediction_history["Status_KRI_HOP"]
+                    == projected_hop_status
+                ].copy()
+                history_source_label = (
+                    "seluruh unit – "
+                    f"{projected_hop_status}"
+                )
+
+            if status_history.empty:
+                status_history = prediction_history.copy()
+                history_source_label = (
+                    "seluruh unit dan seluruh status HOP"
+                )
+
+            historical_observations = len(status_history)
+            historical_events = float(
+                status_history[
+                    "Jumlah_Kejadian_Loss"
+                ].sum()
+            )
+            historical_event_rate = (
+                historical_events / historical_observations
+                if historical_observations > 0
+                else 0.0
+            )
+
+            expected_event_frequency = (
+                historical_event_rate * projection_days
+            )
+            probability_at_least_one = (
+                1 - math.exp(-expected_event_frequency)
+            )
+
+            unit_severity = filtered[
+                filtered["HOP_Unit_Key"]
+                == prediction_unit
+            ]["Loss_Opportunity_Rp"].dropna()
+            unit_severity = unit_severity[
+                unit_severity > 0
+            ].astype(float)
+
+            severity_basis_label = prediction_unit
+
+            if len(unit_severity) < 3:
+                unit_severity = filtered[
+                    "Loss_Opportunity_Rp"
+                ].dropna()
+                unit_severity = unit_severity[
+                    unit_severity > 0
+                ].astype(float)
+                severity_basis_label = "seluruh unit terfilter"
+
+            duration_metric, status_metric = st.columns(2)
+            duration_metric.metric(
+                "Durasi Prediksi",
+                f"{projection_days:,} hari kalender",
+            )
+            status_metric.markdown(
+                "**Status Proyeksi HOP**"
+            )
+            status_metric.markdown(
+                f"<div style='background:{projected_status_color};"
+                "color:white;padding:11px 14px;border-radius:8px;"
+                "font-weight:700;text-align:center'>"
+                f"{projected_status_label} · "
+                f"HOP {projected_hop:,.2f}</div>",
+                unsafe_allow_html=True,
+            )
+
+            if len(unit_severity) < 3:
+                st.warning(
+                    "Minimal tiga nilai Loss Opportunity positif "
+                    "diperlukan untuk simulasi dampak."
+                )
+            else:
+                prediction_minimum = float(
+                    unit_severity.quantile(0.10)
+                )
+                prediction_likely = float(
+                    unit_severity.quantile(0.50)
+                )
+                prediction_maximum = float(
+                    unit_severity.quantile(0.90)
+                )
+
+                if prediction_maximum <= prediction_minimum:
+                    prediction_maximum = float(
+                        unit_severity.max()
+                    )
+
+                if prediction_maximum <= prediction_minimum:
+                    st.warning(
+                        "Rentang Loss Opportunity belum memadai "
+                        "untuk membentuk distribusi BETA-PERT."
+                    )
+                else:
+                    prediction_likely = min(
+                        max(
+                            prediction_likely,
+                            prediction_minimum,
+                        ),
+                        prediction_maximum,
+                    )
+                    prediction_lambda = 4.0
+                    prediction_alpha = (
+                        1
+                        + prediction_lambda
+                        * (
+                            prediction_likely
+                            - prediction_minimum
+                        )
+                        / (
+                            prediction_maximum
+                            - prediction_minimum
+                        )
+                    )
+                    prediction_beta = (
+                        1
+                        + prediction_lambda
+                        * (
+                            prediction_maximum
+                            - prediction_likely
+                        )
+                        / (
+                            prediction_maximum
+                            - prediction_minimum
+                        )
+                    )
+
+                    prediction_rng = np.random.default_rng(
+                        int(random_seed) + 101
+                    )
+                    prediction_event_counts = (
+                        prediction_rng.poisson(
+                            lam=expected_event_frequency,
+                            size=int(prediction_iterations),
+                        )
+                    )
+                    prediction_total_events = int(
+                        prediction_event_counts.sum()
+                    )
+                    predicted_losses = np.zeros(
+                        int(prediction_iterations),
+                        dtype=float,
+                    )
+
+                    if prediction_total_events > 0:
+                        prediction_beta_samples = (
+                            prediction_rng.beta(
+                                prediction_alpha,
+                                prediction_beta,
+                                size=prediction_total_events,
+                            )
+                        )
+                        prediction_severities = (
+                            prediction_minimum
+                            + prediction_beta_samples
+                            * (
+                                prediction_maximum
+                                - prediction_minimum
+                            )
+                        )
+                        prediction_simulation_index = np.repeat(
+                            np.arange(
+                                int(prediction_iterations)
+                            ),
+                            prediction_event_counts,
+                        )
+                        predicted_losses = np.bincount(
+                            prediction_simulation_index,
+                            weights=prediction_severities,
+                            minlength=int(prediction_iterations),
+                        )
+
+                    prediction_mean = float(
+                        np.mean(predicted_losses)
+                    )
+                    prediction_p50 = float(
+                        np.percentile(predicted_losses, 50)
+                    )
+                    prediction_p90 = float(
+                        np.percentile(predicted_losses, 90)
+                    )
+                    prediction_p95 = float(
+                        np.percentile(predicted_losses, 95)
+                    )
+                    prediction_exceedance = float(
+                        np.mean(
+                            predicted_losses
+                            > exceedance_limit_rp
+                        )
+                    )
+
+                    likelihood_score = (
+                        likelihood_score_from_probability(
+                            probability_at_least_one
+                        )
+                    )
+                    likelihood_letter = {
+                        1: "A",
+                        2: "B",
+                        3: "C",
+                        4: "D",
+                        5: "E",
+                    }[likelihood_score]
+                    impact_ratio = (
+                        prediction_p90 / risk_limit_rp
+                        if risk_limit_rp > 0
+                        else 0.0
+                    )
+                    impact_score = (
+                        impact_score_from_risk_limit_ratio(
+                            impact_ratio
+                        )
+                    )
+                    prediction_risk_score = edir_risk_score(
+                        impact_score,
+                        likelihood_score,
+                    )
+                    prediction_risk_level = edir_risk_level(
+                        prediction_risk_score
+                    )
+
+                    result_columns = st.columns(6)
+                    result_columns[0].metric(
+                        "Ekspektasi Kejadian",
+                        f"{expected_event_frequency:,.2f}",
+                    )
+                    result_columns[1].metric(
+                        "P(≥1 Kejadian)",
+                        f"{probability_at_least_one:.2%}",
+                    )
+                    result_columns[2].metric(
+                        "P50 Loss",
+                        format_compact_rupiah(
+                            prediction_p50
+                        ),
+                    )
+                    result_columns[3].metric(
+                        "P90 Loss",
+                        format_compact_rupiah(
+                            prediction_p90
+                        ),
+                    )
+                    result_columns[4].metric(
+                        "Kemungkinan",
+                        (
+                            f"{likelihood_letter} "
+                            f"({likelihood_score})"
+                        ),
+                    )
+                    result_columns[5].metric(
+                        "Dampak",
+                        str(impact_score),
+                    )
+
+                    risk_result_col1, risk_result_col2 = (
+                        st.columns([1, 2])
+                    )
+                    risk_result_col1.metric(
+                        "Nilai Risiko",
+                        str(prediction_risk_score),
+                        delta=prediction_risk_level,
+                        delta_color="off",
+                    )
+
+                    prediction_summary = pd.DataFrame(
+                        {
+                            "Parameter": [
+                                "Mean predicted loss",
+                                "P50 predicted loss",
+                                "P90 predicted loss",
+                                "P95 predicted loss",
+                                "P90 terhadap Risk Limit",
+                                (
+                                    "Peluang loss melampaui "
+                                    f"{exceedance_percent}% "
+                                    "Risk Limit"
+                                ),
+                            ],
+                            "Nilai": [
+                                format_compact_rupiah(
+                                    prediction_mean
+                                ),
+                                format_compact_rupiah(
+                                    prediction_p50
+                                ),
+                                format_compact_rupiah(
+                                    prediction_p90
+                                ),
+                                format_compact_rupiah(
+                                    prediction_p95
+                                ),
+                                f"{impact_ratio:.2%}",
+                                f"{prediction_exceedance:.2%}",
+                            ],
+                        }
+                    )
+                    risk_result_col2.dataframe(
+                        prediction_summary,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    prediction_frame = pd.DataFrame(
+                        {"Predicted_Loss_Rp": predicted_losses}
+                    )
+                    prediction_chart = px.histogram(
+                        prediction_frame,
+                        x="Predicted_Loss_Rp",
+                        nbins=45,
+                        histnorm="probability density",
+                        title=(
+                            "Distribusi Prediksi Total Loss – "
+                            f"{prediction_unit}"
+                        ),
+                        labels={
+                            "Predicted_Loss_Rp": (
+                                "Predicted Loss (Rp)"
+                            )
+                        },
+                        color_discrete_sequence=["#2563EB"],
+                    )
+                    for line_value, line_label, line_color in [
+                        (
+                            prediction_p50,
+                            "P50",
+                            "#F59E0B",
+                        ),
+                        (
+                            prediction_p90,
+                            "P90",
+                            "#DC2626",
+                        ),
+                        (
+                            exceedance_limit_rp,
+                            (
+                                f"{exceedance_percent}% "
+                                "Risk Limit"
+                            ),
+                            "#111827",
+                        ),
+                    ]:
+                        prediction_chart.add_vline(
+                            x=line_value,
+                            line_dash="dash",
+                            line_color=line_color,
+                            annotation_text=line_label,
+                            annotation_position="top",
+                        )
+                    prediction_chart.update_layout(
+                        height=450,
+                        margin=dict(
+                            l=20,
+                            r=20,
+                            t=75,
+                            b=20,
+                        ),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(
+                        prediction_chart,
+                        use_container_width=True,
+                        theme="streamlit",
+                    )
+
+                    prediction_matrix = np.array(
+                        [
+                            [1, 5, 10, 15, 20],
+                            [2, 6, 11, 16, 21],
+                            [3, 8, 13, 18, 23],
+                            [4, 9, 14, 19, 24],
+                            [7, 12, 17, 22, 25],
+                        ]
+                    )
+                    prediction_colorscale = [
+                        [0.0000, "#35B24A"],
+                        [0.1875, "#35B24A"],
+                        [0.1876, "#8DCC74"],
+                        [0.3958, "#8DCC74"],
+                        [0.3959, "#FFE31A"],
+                        [0.6042, "#FFE31A"],
+                        [0.6043, "#F5A623"],
+                        [0.7708, "#F5A623"],
+                        [0.7709, "#EF503B"],
+                        [1.0000, "#EF503B"],
+                    ]
+                    prediction_heatmap = go.Figure()
+                    prediction_heatmap.add_trace(
+                        go.Heatmap(
+                            z=prediction_matrix,
+                            x=[1, 2, 3, 4, 5],
+                            y=[1, 2, 3, 4, 5],
+                            zmin=1,
+                            zmax=25,
+                            colorscale=prediction_colorscale,
+                            showscale=False,
+                            hovertemplate=(
+                                "Kemungkinan: %{y}<br>"
+                                "Dampak: %{x}<br>"
+                                "Nilai Risiko: %{z}"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+                    for y_index in range(5):
+                        for x_index in range(5):
+                            prediction_heatmap.add_annotation(
+                                x=x_index + 1,
+                                y=y_index + 1,
+                                text=str(
+                                    int(
+                                        prediction_matrix[
+                                            y_index,
+                                            x_index,
+                                        ]
+                                    )
+                                ),
+                                showarrow=False,
+                                font=dict(
+                                    color="#111827",
+                                    size=13,
+                                ),
+                            )
+                    prediction_heatmap.add_trace(
+                        go.Scatter(
+                            x=[impact_score + 0.28],
+                            y=[likelihood_score + 0.28],
+                            mode="markers+text",
+                            marker=dict(
+                                size=32,
+                                color="#0F172A",
+                                line=dict(
+                                    color="white",
+                                    width=2,
+                                ),
+                            ),
+                            text=["PRED"],
+                            textposition="middle center",
+                            textfont=dict(
+                                color="white",
+                                size=10,
+                            ),
+                            hovertemplate=(
+                                f"{prediction_unit}<br>"
+                                f"Kemungkinan: {likelihood_letter}<br>"
+                                f"Dampak: {impact_score}<br>"
+                                f"Nilai Risiko: "
+                                f"{prediction_risk_score}<br>"
+                                f"Level: {prediction_risk_level}"
+                                "<extra></extra>"
+                            ),
+                            name="Prediksi",
+                        )
+                    )
+                    prediction_heatmap.update_xaxes(
+                        title="Skala Dampak",
+                        tickvals=[1, 2, 3, 4, 5],
+                        range=[0.5, 5.5],
+                    )
+                    prediction_heatmap.update_yaxes(
+                        title="Skala Kemungkinan",
+                        tickvals=[1, 2, 3, 4, 5],
+                        ticktext=["A", "B", "C", "D", "E"],
+                        range=[0.5, 5.5],
+                    )
+                    prediction_heatmap.update_layout(
+                        title="Posisi Prediksi pada Heat Map Juknis",
+                        height=570,
+                        margin=dict(
+                            l=70,
+                            r=30,
+                            t=70,
+                            b=60,
+                        ),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(
+                        prediction_heatmap,
+                        use_container_width=True,
+                        theme="streamlit",
+                    )
+
+                    if projected_hop_status == "EMERGENCY":
+                        recommendation = (
+                            "Aktifkan respons prioritas: validasi "
+                            "stok dan jadwal pasokan, percepat "
+                            "pengiriman, evaluasi kualitas batubara, "
+                            "dan siapkan skenario operasi pembangkit."
+                        )
+                    elif projected_hop_status == "SIAGA":
+                        recommendation = (
+                            "Perketat monitoring harian HOP dan "
+                            "realisasi pasokan, konfirmasi jadwal "
+                            "pengiriman, serta siapkan tindakan "
+                            "kontinjensi sebelum HOP turun di bawah 10."
+                        )
+                    else:
+                        recommendation = (
+                            "Pertahankan monitoring rutin dan "
+                            "pastikan realisasi pasokan menjaga HOP "
+                            "tetap di atas 15 hari."
+                        )
+
+                    st.success(
+                        "**Rekomendasi model:** "
+                        + recommendation
+                    )
+
+                    with st.expander(
+                        "Dasar dan asumsi prediksi"
+                    ):
+                        st.markdown(
+                            f"""
+- Durasi dihitung otomatis dari **{prediction_start:%d %b %Y}** sampai **{prediction_end:%d %b %Y}**: **{projection_days:,} hari kalender**.
+- Laju historis berasal dari **{history_source_label}**, dengan **{historical_observations:,} observasi unit-hari** dan **{historical_events:,.0f} kejadian**.
+- Basis severity berasal dari **{severity_basis_label}**.
+- Frekuensi menggunakan distribusi **Poisson** dan severity menggunakan **BETA-PERT**.
+- Faktor kemungkinan memakai peluang minimal satu kejadian; faktor dampak memakai **P90/Risk Limit**.
+- Hasil merupakan prediksi berbasis skenario, bukan kepastian kejadian.
+"""
+                        )
+
+
+# ============================================================
 # TAB RISK HEAT MAP
 # ============================================================
 
@@ -2373,9 +3279,16 @@ with tab_heatmap:
     )
 
     st.caption(
-        "Pemetaan relatif kategori risiko berdasarkan "
-        "frekuensi Kejadian Loss dan median Loss Opportunity "
-        "pada data yang sesuai filter."
+        "Skala kemungkinan dibentuk dari frekuensi relatif "
+        "Kejadian Loss. Skala dampak dihitung dari total "
+        "Loss Opportunity terhadap Risk Limit aktif."
+    )
+
+    st.info(
+        "Risk Limit aktif: "
+        f"**{format_compact_rupiah(risk_limit_rp)}**. "
+        "Ubah nilainya melalui tab Monte Carlo & BETA-PERT; "
+        "heat map akan dihitung ulang secara otomatis."
     )
 
     heatmap_source = filtered.copy()
@@ -2431,14 +3344,9 @@ with tab_heatmap:
 
         if category_count == 1:
             category_risk["Skala_Kemungkinan"] = 3
-            category_risk["Skala_Dampak"] = 3
         else:
             likelihood_percentile = (
                 category_risk["Jumlah_Kejadian"]
-                .rank(method="average", pct=True)
-            )
-            impact_percentile = (
-                category_risk["Median_Severity_Rp"]
                 .rank(method="average", pct=True)
             )
 
@@ -2447,11 +3355,19 @@ with tab_heatmap:
                 .clip(1, 5)
                 .astype(int)
             )
-            category_risk["Skala_Dampak"] = (
-                np.ceil(impact_percentile * 5)
-                .clip(1, 5)
-                .astype(int)
-            )
+
+        category_risk["Rasio_Risk_Limit"] = (
+            category_risk["Total_Loss_Rp"]
+            / risk_limit_rp
+        )
+        category_risk["Persen_Risk_Limit"] = (
+            category_risk["Rasio_Risk_Limit"] * 100
+        )
+        category_risk["Skala_Dampak"] = (
+            category_risk["Rasio_Risk_Limit"]
+            .apply(impact_score_from_risk_limit_ratio)
+            .astype(int)
+        )
 
         # Nilai matriks mengikuti Gambar 3 Peta Risiko pada
         # 0012.E-2024 Edir Juknis Perencanaan Manajemen
@@ -2589,6 +3505,7 @@ with tab_heatmap:
                         "Kategori_Final",
                         "Jumlah_Kejadian",
                         "Median_Severity_Rp",
+                        "Rasio_Risk_Limit",
                         "Level_Risiko",
                     ]
                 ].to_numpy(),
@@ -2596,7 +3513,8 @@ with tab_heatmap:
                     "<b>%{customdata[0]}</b><br>"
                     "Jumlah Kejadian: %{customdata[1]}<br>"
                     "Median Severity: Rp%{customdata[2]:,.0f}<br>"
-                    "Level: %{customdata[3]}<extra></extra>"
+                    "% Risk Limit: %{customdata[3]:.2%}<br>"
+                    "Level: %{customdata[4]}<extra></extra>"
                 ),
                 name="Kategori Risiko",
             )
@@ -2674,6 +3592,7 @@ with tab_heatmap:
                 "Kategori_Final",
                 "Jumlah_Kejadian",
                 "Median_Severity_Rp",
+                "Persen_Risk_Limit",
                 "Skala_Kemungkinan",
                 "Skala_Dampak",
                 "Nilai_Risiko",
@@ -2704,6 +3623,12 @@ with tab_heatmap:
                     st.column_config.NumberColumn(
                         "Median Severity",
                         format="Rp %,.0f",
+                    )
+                ),
+                "Persen_Risk_Limit": (
+                    st.column_config.NumberColumn(
+                        "% Risk Limit",
+                        format="%.2f%%",
                     )
                 ),
                 "Skala_Kemungkinan": (
@@ -2739,8 +3664,10 @@ with tab_heatmap:
                 """
 - **Skala kemungkinan** dibentuk dari peringkat relatif
   jumlah Kejadian Loss antar-kategori pada data terfilter.
-- **Skala dampak** dibentuk dari peringkat relatif median
-  Loss Opportunity antar-kategori pada data terfilter.
+- **Skala dampak** menggunakan total Loss Opportunity
+  kategori terhadap Risk Limit aktif: sampai 20% = 1,
+  20–40% = 2, 40–60% = 3, 60–80% = 4, dan di atas
+  80% = 5.
 - **Nilai risiko** mengikuti posisi matriks pada Gambar 3
   Peta Risiko dalam 0012.E-2024 Edir Juknis Perencanaan
   Manajemen Risiko Terintegrasi.
