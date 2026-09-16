@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_VERSION = "2026.09.16-prime-risk-v5"
+APP_VERSION = "2026.09.16-juknis-heatmap-v6"
 
 
 # ============================================================
@@ -2122,24 +2122,46 @@ with tab_heatmap:
                 .astype(int)
             )
 
-        category_risk["Nilai_Risiko"] = (
-            category_risk["Skala_Kemungkinan"]
-            * category_risk["Skala_Dampak"]
+        # Nilai matriks mengikuti Gambar 3 Peta Risiko pada
+        # 0012.E-2024 Edir Juknis Perencanaan Manajemen
+        # Risiko Terintegrasi, bukan perkalian sederhana.
+        risk_matrix = np.array(
+            [
+                [1, 5, 10, 15, 20],
+                [2, 6, 11, 16, 21],
+                [3, 8, 13, 18, 23],
+                [4, 9, 14, 19, 24],
+                [7, 12, 17, 22, 25],
+            ]
         )
 
-        category_risk["Level_Risiko"] = "Rendah"
+        category_risk["Nilai_Risiko"] = category_risk.apply(
+            lambda row: int(
+                risk_matrix[
+                    int(row["Skala_Kemungkinan"]) - 1,
+                    int(row["Skala_Dampak"]) - 1,
+                ]
+            ),
+            axis=1,
+        )
+
+        category_risk["Level_Risiko"] = "Low"
         category_risk.loc[
-            category_risk["Nilai_Risiko"].between(5, 9),
+            category_risk["Nilai_Risiko"].between(6, 10),
             "Level_Risiko",
-        ] = "Moderat"
+        ] = "Low to Moderate"
         category_risk.loc[
-            category_risk["Nilai_Risiko"].between(10, 16),
+            category_risk["Nilai_Risiko"].between(11, 15),
             "Level_Risiko",
-        ] = "Tinggi"
+        ] = "Moderate"
         category_risk.loc[
-            category_risk["Nilai_Risiko"] >= 17,
+            category_risk["Nilai_Risiko"].between(16, 19),
             "Level_Risiko",
-        ] = "Ekstrem"
+        ] = "Moderate to High"
+        category_risk.loc[
+            category_risk["Nilai_Risiko"].between(20, 25),
+            "Level_Risiko",
+        ] = "High"
 
         category_risk = category_risk.sort_values(
             [
@@ -2154,25 +2176,17 @@ with tab_heatmap:
             for index in range(len(category_risk))
         ]
 
-        risk_matrix = np.array(
-            [
-                [
-                    likelihood * impact
-                    for impact in range(1, 6)
-                ]
-                for likelihood in range(1, 6)
-            ]
-        )
-
         risk_colorscale = [
-            [0.00, "#22C55E"],
-            [0.16, "#22C55E"],
-            [0.17, "#FACC15"],
-            [0.36, "#FACC15"],
-            [0.37, "#F97316"],
-            [0.64, "#F97316"],
-            [0.65, "#DC2626"],
-            [1.00, "#DC2626"],
+            [0.0000, "#35B24A"],
+            [0.1875, "#35B24A"],
+            [0.1876, "#8DCC74"],
+            [0.3958, "#8DCC74"],
+            [0.3959, "#FFE31A"],
+            [0.6042, "#FFE31A"],
+            [0.6043, "#F5A623"],
+            [0.7708, "#F5A623"],
+            [0.7709, "#EF503B"],
+            [1.0000, "#EF503B"],
         ]
 
         heatmap_figure = go.Figure()
@@ -2202,11 +2216,17 @@ with tab_heatmap:
 
         heatmap_figure.add_trace(
             go.Scatter(
-                x=category_risk["Skala_Dampak"],
-                y=category_risk["Skala_Kemungkinan"],
+                x=(
+                    category_risk["Skala_Dampak"]
+                    + 0.31
+                ),
+                y=(
+                    category_risk["Skala_Kemungkinan"]
+                    + 0.31
+                ),
                 mode="markers+text",
                 marker=dict(
-                    size=34,
+                    size=29,
                     color="#0F172A",
                     line=dict(
                         color="white",
@@ -2244,7 +2264,7 @@ with tab_heatmap:
             ticktext=[
                 "1 Sangat Rendah",
                 "2 Rendah",
-                "3 Sedang",
+                "3 Moderat",
                 "4 Tinggi",
                 "5 Sangat Tinggi",
             ],
@@ -2255,11 +2275,11 @@ with tab_heatmap:
             tickmode="array",
             tickvals=[1, 2, 3, 4, 5],
             ticktext=[
-                "1 Sangat Jarang",
-                "2 Jarang",
-                "3 Mungkin",
-                "4 Sering",
-                "5 Sangat Sering",
+                "A · Sangat Jarang Terjadi",
+                "B · Jarang Terjadi",
+                "C · Bisa Terjadi",
+                "D · Sangat Mungkin Terjadi",
+                "E · Hampir Pasti Terjadi",
             ],
             range=[0.5, 5.5],
         )
@@ -2282,6 +2302,25 @@ with tab_heatmap:
             heatmap_figure,
             use_container_width=True,
             theme="streamlit",
+        )
+
+        st.markdown(
+            "**Legenda warna berdasarkan "
+            "0012.E-2024 Edir Juknis Perencanaan "
+            "Manajemen Risiko Terintegrasi**"
+        )
+
+        st.markdown(
+            """
+<div style="display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 20px 0;">
+  <div style="background:#35B24A;color:#ffffff;padding:10px 16px;border-radius:8px;font-weight:600;">1–5 · Low</div>
+  <div style="background:#8DCC74;color:#102A13;padding:10px 16px;border-radius:8px;font-weight:600;">6–10 · Low to Moderate</div>
+  <div style="background:#FFE31A;color:#332C00;padding:10px 16px;border-radius:8px;font-weight:600;">11–15 · Moderate</div>
+  <div style="background:#F5A623;color:#2F1D00;padding:10px 16px;border-radius:8px;font-weight:600;">16–19 · Moderate to High</div>
+  <div style="background:#EF503B;color:#ffffff;padding:10px 16px;border-radius:8px;font-weight:600;">20–25 · High</div>
+</div>
+""",
+            unsafe_allow_html=True,
         )
 
         heatmap_display = category_risk[
@@ -2357,9 +2396,12 @@ with tab_heatmap:
   jumlah Kejadian Loss antar-kategori pada data terfilter.
 - **Skala dampak** dibentuk dari peringkat relatif median
   Loss Opportunity antar-kategori pada data terfilter.
-- **Nilai risiko** adalah Skala Kemungkinan × Skala Dampak.
-- Klasifikasi awal: 1–4 Rendah, 5–9 Moderat,
-  10–16 Tinggi, dan 17–25 Ekstrem.
+- **Nilai risiko** mengikuti posisi matriks pada Gambar 3
+  Peta Risiko dalam 0012.E-2024 Edir Juknis Perencanaan
+  Manajemen Risiko Terintegrasi.
+- Legend warna: 1–5 Low, 6–10 Low to Moderate,
+  11–15 Moderate, 16–19 Moderate to High, dan
+  20–25 High.
 - Heat map ini merupakan pembandingan relatif untuk
   eksplorasi model. Batas skala perlu diganti dengan
   kriteria matriks risiko korporat sebelum digunakan
