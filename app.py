@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.16-pdf-report-v13"
+APP_VERSION = "2026.09.16-pdf-header-fix-v14"
 
 
 # ============================================================
@@ -240,6 +240,14 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
         fontSize=7.5,
         leading=10,
     )
+    table_header_style = ParagraphStyle(
+        "PrimeTableHeader",
+        parent=small_style,
+        fontName="Helvetica-Bold",
+        textColor=colors.white,
+        alignment=TA_CENTER,
+        leading=9,
+    )
 
     def page_header_footer(canvas, doc):
         canvas.saveState()
@@ -274,7 +282,11 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
                 [
                     Paragraph(
                         str(value),
-                        small_style,
+                        (
+                            table_header_style
+                            if header and row_index == 0
+                            else small_style
+                        ),
                     )
                     for value in row
                 ]
