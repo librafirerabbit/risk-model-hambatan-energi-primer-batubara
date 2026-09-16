@@ -2325,7 +2325,7 @@ with tab_monte_carlo:
     )
 
     # --------------------------------------------------------
-    # RISK LIMIT DINAMIS
+    # RISK LIMIT DINAMIS                    
     # --------------------------------------------------------
 
     risk_limit_series = pd.Series(dtype=float)
@@ -2354,8 +2354,8 @@ with tab_monte_carlo:
         )
 
     with st.expander(
-        "⚙️ Pengaturan Risk Limit",
-        expanded=True,
+        "⚙️ ",
+        expanded=False,
     ):
         available_limit_modes = ["Input manual"]
 
