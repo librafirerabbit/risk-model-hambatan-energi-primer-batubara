@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_VERSION = "2026.09.16-juknis-heatmap-v6"
+APP_VERSION = "2026.09.16-heatmap-font-v8"
 
 
 # ============================================================
@@ -2200,12 +2200,6 @@ with tab_heatmap:
                 zmax=25,
                 colorscale=risk_colorscale,
                 showscale=False,
-                text=risk_matrix,
-                texttemplate="%{text}",
-                textfont=dict(
-                    color="white",
-                    size=14,
-                ),
                 hovertemplate=(
                     "Kemungkinan: %{y}<br>"
                     "Dampak: %{x}<br>"
@@ -2213,6 +2207,26 @@ with tab_heatmap:
                 ),
             )
         )
+
+        for likelihood_index in range(5):
+            for impact_index in range(5):
+                cell_value = int(
+                    risk_matrix[
+                        likelihood_index,
+                        impact_index,
+                    ]
+                )
+
+                heatmap_figure.add_annotation(
+                    x=impact_index + 1,
+                    y=likelihood_index + 1,
+                    text=str(cell_value),
+                    showarrow=False,
+                    font=dict(
+                        color="#111827",
+                        size=14,
+                    ),
+                )
 
         heatmap_figure.add_trace(
             go.Scatter(
