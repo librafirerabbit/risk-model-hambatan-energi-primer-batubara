@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_VERSION = "2026.09.16-heatmap-font-v8"
+APP_VERSION = "2026.09.16-kri-validation-v9"
 
 
 # ============================================================
@@ -583,9 +583,11 @@ st.success(
 
 (
     tab_summary,
+    tab_kri,
     tab_hop_loss,
     tab_monte_carlo,
     tab_heatmap,
+    tab_validation,
     tab_loss,
     tab_hop,
     tab_quality,
@@ -593,9 +595,11 @@ st.success(
 ) = st.tabs(
     [
         "Ringkasan",
+        "KRI & Early Warning",
         "Analisis HOP–Loss",
         "Monte Carlo & BETA-PERT",
         "Risk Heat Map",
+        "Validasi Model",
         "Kejadian Loss",
         "HOP Harian",
         "Kualitas Data",
@@ -847,6 +851,362 @@ with tab_summary:
         st.plotly_chart(
             figure_unit,
             use_container_width=True,
+        )
+
+
+# ============================================================
+# TAB KRI DAN EARLY WARNING
+# ============================================================
+
+with tab_kri:
+    st.subheader(
+        "KRI & Early Warning Hambatan Energi Primer"
+    )
+
+    st.caption(
+        "Pemantauan kondisi HOP terakhir setiap unit, "
+        "deviasi terhadap batas P20, tren tujuh observasi, "
+        "dan durasi HOP rendah berturut-turut."
+    )
+
+    kri_hop = filtered_hop[
+        [
+            "Tanggal",
+            "HOP_Unit_Key",
+            "Nilai_HOP",
+        ]
+    ].copy()
+
+    kri_hop = kri_hop.dropna(
+        subset=[
+            "Tanggal",
+            "HOP_Unit_Key",
+            "Nilai_HOP",
+        ]
+    ).sort_values(
+        [
+            "HOP_Unit_Key",
+            "Tanggal",
+        ]
+    )
+
+    kri_threshold = (
+        loss_data[
+            [
+                "HOP_Unit_Key",
+                "Batas_HOP_P20",
+            ]
+        ]
+        .dropna()
+        .groupby(
+            "HOP_Unit_Key",
+            as_index=False,
+        )
+        .agg(
+            Batas_HOP_P20=(
+                "Batas_HOP_P20",
+                "median",
+            )
+        )
+    )
+
+    kri_hop = kri_hop.merge(
+        kri_threshold,
+        on="HOP_Unit_Key",
+        how="left",
+    )
+
+    kri_rows = []
+
+    for unit_name, unit_data in kri_hop.groupby(
+        "HOP_Unit_Key"
+    ):
+        unit_data = unit_data.sort_values(
+            "Tanggal"
+        ).reset_index(drop=True)
+
+        latest_row = unit_data.iloc[-1]
+        latest_hop = float(latest_row["Nilai_HOP"])
+        threshold_value = latest_row["Batas_HOP_P20"]
+
+        trend_7 = np.nan
+        if len(unit_data) >= 8:
+            trend_7 = (
+                latest_hop
+                - float(unit_data.iloc[-8]["Nilai_HOP"])
+            )
+
+        consecutive_low_days = 0
+        if pd.notna(threshold_value):
+            low_flags = (
+                unit_data["Nilai_HOP"]
+                <= unit_data["Batas_HOP_P20"]
+            )
+
+            for is_low in reversed(
+                low_flags.fillna(False).tolist()
+            ):
+                if is_low:
+                    consecutive_low_days += 1
+                else:
+                    break
+
+        deviation = (
+            latest_hop - float(threshold_value)
+            if pd.notna(threshold_value)
+            else np.nan
+        )
+
+        status_kri = "ABU-ABU"
+        status_reason = "Batas P20 belum tersedia"
+
+        if pd.notna(threshold_value):
+            warning_band = max(
+                1.0,
+                abs(float(threshold_value)) * 0.20,
+            )
+
+            if consecutive_low_days >= 3:
+                status_kri = "MERAH"
+                status_reason = (
+                    "HOP ≤ P20 minimal 3 observasi "
+                    "berturut-turut"
+                )
+            elif latest_hop <= float(threshold_value):
+                status_kri = "ORANYE"
+                status_reason = "HOP terakhir ≤ P20"
+            elif (
+                deviation <= warning_band
+                or (
+                    pd.notna(trend_7)
+                    and trend_7 < 0
+                    and deviation <= 2 * warning_band
+                )
+            ):
+                status_kri = "KUNING"
+                status_reason = (
+                    "HOP mendekati P20 atau tren menurun"
+                )
+            else:
+                status_kri = "HIJAU"
+                status_reason = "HOP berada di atas batas peringatan"
+
+        kri_rows.append(
+            {
+                "HOP_Unit_Key": unit_name,
+                "Tanggal_Terakhir": latest_row["Tanggal"],
+                "HOP_Terakhir": latest_hop,
+                "Batas_HOP_P20": threshold_value,
+                "Deviasi_dari_P20": deviation,
+                "Tren_7_Observasi": trend_7,
+                "Durasi_HOP_Rendah": consecutive_low_days,
+                "Status_KRI": status_kri,
+                "Dasar_Status": status_reason,
+            }
+        )
+
+    kri_unit = pd.DataFrame(kri_rows)
+
+    if kri_unit.empty:
+        st.warning(
+            "Data HOP belum tersedia untuk membentuk KRI."
+        )
+    else:
+        kri_status_order = [
+            "MERAH",
+            "ORANYE",
+            "KUNING",
+            "HIJAU",
+            "ABU-ABU",
+        ]
+
+        kri_status_colors = {
+            "MERAH": "#DC2626",
+            "ORANYE": "#F97316",
+            "KUNING": "#FACC15",
+            "HIJAU": "#16A34A",
+            "ABU-ABU": "#64748B",
+        }
+
+        kri_counts = (
+            kri_unit["Status_KRI"]
+            .value_counts()
+            .reindex(
+                kri_status_order,
+                fill_value=0,
+            )
+        )
+
+        kri_metrics = st.columns(5)
+        for index, status_name in enumerate(
+            kri_status_order
+        ):
+            kri_metrics[index].metric(
+                f"Unit {status_name.title()}",
+                format_number(
+                    kri_counts[status_name]
+                ),
+            )
+
+        kri_chart_col1, kri_chart_col2 = st.columns(
+            [1, 2]
+        )
+
+        with kri_chart_col1:
+            status_chart_data = (
+                kri_counts
+                .rename_axis("Status_KRI")
+                .reset_index(name="Jumlah_Unit")
+            )
+            status_chart_data = status_chart_data[
+                status_chart_data["Jumlah_Unit"] > 0
+            ]
+
+            kri_status_chart = px.pie(
+                status_chart_data,
+                names="Status_KRI",
+                values="Jumlah_Unit",
+                hole=0.55,
+                title="Komposisi Status KRI Unit",
+                color="Status_KRI",
+                color_discrete_map=kri_status_colors,
+            )
+            kri_status_chart.update_traces(
+                textinfo="label+value"
+            )
+            kri_status_chart.update_layout(
+                height=440,
+                showlegend=False,
+            )
+            st.plotly_chart(
+                kri_status_chart,
+                use_container_width=True,
+                theme="streamlit",
+            )
+
+        with kri_chart_col2:
+            kri_bar_data = kri_unit.melt(
+                id_vars=[
+                    "HOP_Unit_Key",
+                    "Status_KRI",
+                ],
+                value_vars=[
+                    "HOP_Terakhir",
+                    "Batas_HOP_P20",
+                ],
+                var_name="Indikator",
+                value_name="HOP",
+            ).dropna(subset=["HOP"])
+
+            kri_bar_chart = px.bar(
+                kri_bar_data,
+                x="HOP_Unit_Key",
+                y="HOP",
+                color="Indikator",
+                barmode="group",
+                title=(
+                    "HOP Terakhir dibandingkan Batas P20"
+                ),
+                labels={
+                    "HOP_Unit_Key": "Unit",
+                    "HOP": "HOP (hari)",
+                    "Indikator": "Indikator",
+                },
+                color_discrete_map={
+                    "HOP_Terakhir": "#0F6CBD",
+                    "Batas_HOP_P20": "#F59E0B",
+                },
+            )
+            kri_bar_chart.update_xaxes(
+                tickangle=-45
+            )
+            kri_bar_chart.update_layout(
+                height=440,
+                margin=dict(
+                    l=20,
+                    r=20,
+                    t=70,
+                    b=130,
+                ),
+            )
+            st.plotly_chart(
+                kri_bar_chart,
+                use_container_width=True,
+                theme="streamlit",
+            )
+
+        kri_unit["Prioritas"] = (
+            kri_unit["Status_KRI"]
+            .map(
+                {
+                    "MERAH": 1,
+                    "ORANYE": 2,
+                    "KUNING": 3,
+                    "HIJAU": 4,
+                    "ABU-ABU": 5,
+                }
+            )
+        )
+        kri_unit = kri_unit.sort_values(
+            [
+                "Prioritas",
+                "Deviasi_dari_P20",
+            ]
+        ).drop(columns="Prioritas")
+
+        st.dataframe(
+            kri_unit,
+            use_container_width=True,
+            hide_index=True,
+            height=520,
+            column_config={
+                "Tanggal_Terakhir": (
+                    st.column_config.DateColumn(
+                        "Tanggal Terakhir",
+                        format="DD-MMM-YYYY",
+                    )
+                ),
+                "HOP_Terakhir": (
+                    st.column_config.NumberColumn(
+                        "HOP Terakhir",
+                        format="%.2f",
+                    )
+                ),
+                "Batas_HOP_P20": (
+                    st.column_config.NumberColumn(
+                        "Batas P20",
+                        format="%.2f",
+                    )
+                ),
+                "Deviasi_dari_P20": (
+                    st.column_config.NumberColumn(
+                        "Deviasi dari P20",
+                        format="%.2f",
+                    )
+                ),
+                "Tren_7_Observasi": (
+                    st.column_config.NumberColumn(
+                        "Tren 7 Observasi",
+                        format="%+.2f",
+                    )
+                ),
+                "Durasi_HOP_Rendah": (
+                    st.column_config.NumberColumn(
+                        "Durasi HOP Rendah",
+                        format="%d",
+                    )
+                ),
+            },
+        )
+
+        st.warning(
+            "Status KRI menggunakan batas operasional awal "
+            "model: Merah jika HOP ≤ P20 minimal tiga "
+            "observasi berturut-turut; Oranye jika HOP "
+            "terakhir ≤ P20; Kuning jika mendekati P20 "
+            "atau menunjukkan tren menurun. Batas ini perlu "
+            "disahkan bersama pemilik risiko sebelum menjadi "
+            "ketentuan resmi."
         )
 
 # ============================================================
@@ -2422,6 +2782,310 @@ with tab_heatmap:
   sebagai penetapan level risiko resmi.
 """
             )
+
+
+# ============================================================
+# TAB VALIDASI MODEL
+# ============================================================
+
+with tab_validation:
+    st.subheader(
+        "Validasi Awal PRIME-RISK"
+    )
+
+    st.caption(
+        "Pemeriksaan kualitas data, dukungan statistik, "
+        "kesiapan model frekuensi dan severity, serta "
+        "kesenjangan validasi yang masih harus ditutup."
+    )
+
+    validation_loss = filtered.copy()
+
+    dated_validation_loss = validation_loss.copy()
+    if "Start_DateTime" in dated_validation_loss.columns:
+        dated_validation_loss = dated_validation_loss.dropna(
+            subset=["Start_DateTime"]
+        )
+
+    total_dated_events = int(
+        dated_validation_loss[LOSS_ID_COLUMN].nunique()
+    )
+
+    paired_hop_events = 0
+    if "Nilai_HOP" in dated_validation_loss.columns:
+        paired_hop_events = int(
+            dated_validation_loss
+            .dropna(subset=["Nilai_HOP"])[
+                LOSS_ID_COLUMN
+            ]
+            .nunique()
+        )
+
+    hop_pairing_coverage = (
+        paired_hop_events / total_dated_events
+        if total_dated_events > 0
+        else 0
+    )
+
+    mapped_events = int(
+        dated_validation_loss
+        .dropna(subset=["HOP_Unit_Key"])[
+            LOSS_ID_COLUMN
+        ]
+        .nunique()
+    )
+    mapping_coverage = (
+        mapped_events / total_dated_events
+        if total_dated_events > 0
+        else 0
+    )
+
+    negative_hop_records = int(
+        (filtered_hop["Nilai_HOP"] < 0).sum()
+    )
+    duplicate_unit_days = int(
+        filtered_hop.duplicated(
+            subset=[
+                "Tanggal",
+                "HOP_Unit_Key",
+            ]
+        ).sum()
+    )
+
+    severity_sample_count = int(
+        dated_validation_loss[
+            "Loss_Opportunity_Rp"
+        ]
+        .dropna()
+        .gt(0)
+        .sum()
+    )
+
+    validation_metric1, validation_metric2, validation_metric3, validation_metric4 = (
+        st.columns(4)
+    )
+
+    validation_metric1.metric(
+        "Coverage Loss–HOP",
+        f"{hop_pairing_coverage:.1%}",
+    )
+    validation_metric2.metric(
+        "Coverage Mapping Unit",
+        f"{mapping_coverage:.1%}",
+    )
+    validation_metric3.metric(
+        "Sampel Severity Positif",
+        format_number(severity_sample_count),
+    )
+    validation_metric4.metric(
+        "HOP Negatif",
+        format_number(negative_hop_records),
+    )
+
+    validation_rows = [
+        {
+            "Area_Validasi": "Kelengkapan pasangan Loss–HOP",
+            "Indikator": "Coverage kejadian bertanggal dengan Nilai HOP",
+            "Hasil": f"{hop_pairing_coverage:.1%}",
+            "Status": (
+                "MEMADAI"
+                if hop_pairing_coverage >= 0.90
+                else "PERLU PERBAIKAN"
+            ),
+            "Tindak_Lanjut": (
+                "Pertahankan coverage minimal 90%"
+                if hop_pairing_coverage >= 0.90
+                else "Lengkapi pasangan tanggal-unit dengan HOP"
+            ),
+        },
+        {
+            "Area_Validasi": "Mapping unit",
+            "Indikator": "Kejadian bertanggal dengan HOP_Unit_Key",
+            "Hasil": f"{mapping_coverage:.1%}",
+            "Status": (
+                "MEMADAI"
+                if mapping_coverage >= 0.95
+                else "PERLU PERBAIKAN"
+            ),
+            "Tindak_Lanjut": "Verifikasi unit yang belum terpetakan",
+        },
+        {
+            "Area_Validasi": "Duplikasi HOP",
+            "Indikator": "Duplikasi kombinasi tanggal dan unit",
+            "Hasil": format_number(duplicate_unit_days),
+            "Status": (
+                "MEMADAI"
+                if duplicate_unit_days == 0
+                else "PERLU PERBAIKAN"
+            ),
+            "Tindak_Lanjut": "Hapus atau konsolidasikan duplikasi",
+        },
+        {
+            "Area_Validasi": "Rentang HOP",
+            "Indikator": "Observasi HOP bernilai negatif",
+            "Hasil": format_number(negative_hop_records),
+            "Status": (
+                "MEMADAI"
+                if negative_hop_records == 0
+                else "VALIDASI SUMBER"
+            ),
+            "Tindak_Lanjut": (
+                "Konfirmasi definisi dan sumber nilai HOP negatif"
+            ),
+        },
+        {
+            "Area_Validasi": "Asosiasi HOP–Loss",
+            "Indikator": "Relative Risk dan 95% CI",
+            "Hasil": (
+                f"RR {relative_risk:.2f}x; CI "
+                f"{rr_ci_low:.2f}–{rr_ci_high:.2f}"
+                if (
+                    relative_risk is not None
+                    and rr_ci_low is not None
+                    and rr_ci_high is not None
+                )
+                else "Belum dapat dihitung"
+            ),
+            "Status": (
+                "SIGNIFIKAN"
+                if association_significant
+                else "PERLU TAMBAHAN DATA"
+            ),
+            "Tindak_Lanjut": (
+                "Uji konsistensi per regional dan leave-one-unit-out"
+            ),
+        },
+        {
+            "Area_Validasi": "Model frekuensi",
+            "Indikator": "Ketersediaan exposure unit-hari",
+            "Hasil": format_number(len(filtered_hop)),
+            "Status": (
+                "SIAP UJI DISTRIBUSI"
+                if len(filtered_hop) >= 365
+                else "DATA TERBATAS"
+            ),
+            "Tindak_Lanjut": (
+                "Bandingkan Poisson dan Negative Binomial"
+            ),
+        },
+        {
+            "Area_Validasi": "Model severity",
+            "Indikator": "Jumlah severity positif bertanggal",
+            "Hasil": format_number(severity_sample_count),
+            "Status": (
+                "SIAP UJI DISTRIBUSI"
+                if severity_sample_count >= 30
+                else "DATA TERBATAS"
+            ),
+            "Tindak_Lanjut": (
+                "Bandingkan BETA-PERT, Lognormal, dan Gamma"
+            ),
+        },
+        {
+            "Area_Validasi": "Backtesting temporal",
+            "Indikator": "Aktual dibanding prediksi periode berikutnya",
+            "Hasil": "Belum dilakukan",
+            "Status": "WAJIB DILENGKAPI",
+            "Tindak_Lanjut": (
+                "Pisahkan training dan validation berdasarkan waktu"
+            ),
+        },
+        {
+            "Area_Validasi": "Konvergensi Monte Carlo",
+            "Indikator": "Stabilitas P90 saat iterasi ditambah",
+            "Hasil": "Belum dilakukan",
+            "Status": "WAJIB DILENGKAPI",
+            "Tindak_Lanjut": (
+                "Bandingkan P90 pada 1k, 5k, 10k, dan 50k iterasi"
+            ),
+        },
+    ]
+
+    validation_table = pd.DataFrame(
+        validation_rows
+    )
+
+    st.dataframe(
+        validation_table,
+        use_container_width=True,
+        hide_index=True,
+        height=480,
+        column_config={
+            "Area_Validasi": st.column_config.TextColumn(
+                "Area Validasi",
+                width="medium",
+            ),
+            "Indikator": st.column_config.TextColumn(
+                "Indikator",
+                width="large",
+            ),
+            "Hasil": st.column_config.TextColumn(
+                "Hasil",
+                width="medium",
+            ),
+            "Status": st.column_config.TextColumn(
+                "Status",
+                width="medium",
+            ),
+            "Tindak_Lanjut": st.column_config.TextColumn(
+                "Tindak Lanjut",
+                width="large",
+            ),
+        },
+    )
+
+    validation_failures = int(
+        validation_table["Status"].isin(
+            [
+                "PERLU PERBAIKAN",
+                "DATA TERBATAS",
+            ]
+        ).sum()
+    )
+    validation_mandatory = int(
+        (
+            validation_table["Status"]
+            == "WAJIB DILENGKAPI"
+        ).sum()
+    )
+
+    if (
+        validation_failures == 0
+        and validation_mandatory == 0
+    ):
+        st.success(
+            "Kesimpulan validasi awal: model memenuhi "
+            "pemeriksaan yang tersedia."
+        )
+    else:
+        st.warning(
+            "Kesimpulan validasi awal: PRIME-RISK dapat "
+            "digunakan untuk eksplorasi dan pengambilan "
+            "keputusan pendahuluan, tetapi belum dinyatakan "
+            "tervalidasi penuh. Backtesting temporal, uji "
+            "distribusi pembanding, konvergensi Monte Carlo, "
+            "dan validasi nilai HOP negatif masih harus "
+            "diselesaikan."
+        )
+
+    with st.expander(
+        "Prinsip validasi dan pencegahan data leakage"
+    ):
+        st.markdown(
+            """
+- Pembagian data harus dilakukan berdasarkan waktu,
+  bukan secara acak.
+- Batas P20 untuk data validasi harus dihitung hanya
+  dari periode training.
+- Unit pada periode validasi tidak boleh digunakan
+  untuk mengkalibrasi parameter yang sedang diuji.
+- Hasil perlu diuji per regional dan dengan metode
+  *leave-one-unit-out* agar tidak didominasi satu unit.
+- Status validasi dashboard merupakan pemeriksaan awal,
+  bukan pengesahan independen atau persetujuan pemilik
+  risiko.
+"""
+        )
 # ============================================================
 # TAB KEJADIAN LOSS
 # ============================================================
