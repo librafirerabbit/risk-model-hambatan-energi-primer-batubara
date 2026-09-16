@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_VERSION = "2026.09.15-heatmap-v4"
+APP_VERSION = "2026.09.16-prime-risk-v5"
 
 
 # ============================================================
@@ -16,7 +16,7 @@ APP_VERSION = "2026.09.15-heatmap-v4"
 # ============================================================
 
 st.set_page_config(
-    page_title="Risk Model Hambatan Energi Primer Batubara",
+    page_title="PRIME-RISK | Primary Energy Risk Intelligence",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -477,13 +477,18 @@ if selected_units:
 # ============================================================
 
 st.title(
-    "Risk Model Hambatan Energi Primer Batubara"
+    "PRIME-RISK"
+)
+
+st.subheader(
+    "Primary Energy Risk Intelligence, Modelling & Evaluation"
 )
 
 st.caption(
-    "Pemodelan risiko berbasis Kejadian Loss, "
-    "HOP harian, frekuensi kejadian, "
-    "dan severity kerugian."
+    "Model prediktif risiko hambatan energi primer "
+    "batubara berbasis HOP, Kejadian Loss, asosiasi "
+    "statistik, BETA-PERT, Monte Carlo, probability "
+    "of exceedance, dan risk heat map."
 )
 
 
@@ -2918,6 +2923,14 @@ with tab_method:
 
     st.markdown(
         """
+### Identitas model
+
+**PRIME-RISK** merupakan singkatan dari **Primary Energy
+Risk Intelligence, Modelling & Evaluation**. Model ini
+mengubah data HOP dan Kejadian Loss menjadi informasi
+frekuensi, severity, distribusi kerugian, probability of
+exceedance, dan posisi risiko pada heat map.
+
 ### Definisi Kejadian Loss
 
 **Kejadian Loss** adalah satu rangkaian kejadian risiko
@@ -2979,7 +2992,8 @@ Data ini dapat digunakan untuk:
 st.divider()
 
 st.caption(
-    "Risk Model Hambatan Energi Primer Batubara · "
+    "PRIME-RISK · Primary Energy Risk Intelligence, "
+    "Modelling & Evaluation · "
     "Sumber data Google Sheet publik · "
     f"Versi {APP_VERSION}"
 )
