@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_VERSION = "2026.09.16-kri-validation-v9"
+APP_VERSION = "2026.09.16-kri-fixed-v10"
 
 
 # ============================================================
@@ -957,39 +957,17 @@ with tab_kri:
             else np.nan
         )
 
-        status_kri = "ABU-ABU"
-        status_reason = "Batas P20 belum tersedia"
-
-        if pd.notna(threshold_value):
-            warning_band = max(
-                1.0,
-                abs(float(threshold_value)) * 0.20,
+        if latest_hop < 10:
+            status_kri = "EMERGENCY"
+            status_reason = "HOP terakhir < 10 hari"
+        elif latest_hop <= 15:
+            status_kri = "SIAGA"
+            status_reason = (
+                "HOP terakhir ≥ 10 dan ≤ 15 hari"
             )
-
-            if consecutive_low_days >= 3:
-                status_kri = "MERAH"
-                status_reason = (
-                    "HOP ≤ P20 minimal 3 observasi "
-                    "berturut-turut"
-                )
-            elif latest_hop <= float(threshold_value):
-                status_kri = "ORANYE"
-                status_reason = "HOP terakhir ≤ P20"
-            elif (
-                deviation <= warning_band
-                or (
-                    pd.notna(trend_7)
-                    and trend_7 < 0
-                    and deviation <= 2 * warning_band
-                )
-            ):
-                status_kri = "KUNING"
-                status_reason = (
-                    "HOP mendekati P20 atau tren menurun"
-                )
-            else:
-                status_kri = "HIJAU"
-                status_reason = "HOP berada di atas batas peringatan"
+        else:
+            status_kri = "NORMAL"
+            status_reason = "HOP terakhir > 15 hari"
 
         kri_rows.append(
             {
@@ -1013,19 +991,15 @@ with tab_kri:
         )
     else:
         kri_status_order = [
-            "MERAH",
-            "ORANYE",
-            "KUNING",
-            "HIJAU",
-            "ABU-ABU",
+            "EMERGENCY",
+            "SIAGA",
+            "NORMAL",
         ]
 
         kri_status_colors = {
-            "MERAH": "#DC2626",
-            "ORANYE": "#F97316",
-            "KUNING": "#FACC15",
-            "HIJAU": "#16A34A",
-            "ABU-ABU": "#64748B",
+            "EMERGENCY": "#DC2626",
+            "SIAGA": "#FACC15",
+            "NORMAL": "#16A34A",
         }
 
         kri_counts = (
@@ -1037,7 +1011,7 @@ with tab_kri:
             )
         )
 
-        kri_metrics = st.columns(5)
+        kri_metrics = st.columns(3)
         for index, status_name in enumerate(
             kri_status_order
         ):
@@ -1139,11 +1113,9 @@ with tab_kri:
             kri_unit["Status_KRI"]
             .map(
                 {
-                    "MERAH": 1,
-                    "ORANYE": 2,
-                    "KUNING": 3,
-                    "HIJAU": 4,
-                    "ABU-ABU": 5,
+                    "EMERGENCY": 1,
+                    "SIAGA": 2,
+                    "NORMAL": 3,
                 }
             )
         )
@@ -1200,13 +1172,12 @@ with tab_kri:
         )
 
         st.warning(
-            "Status KRI menggunakan batas operasional awal "
-            "model: Merah jika HOP ≤ P20 minimal tiga "
-            "observasi berturut-turut; Oranye jika HOP "
-            "terakhir ≤ P20; Kuning jika mendekati P20 "
-            "atau menunjukkan tren menurun. Batas ini perlu "
-            "disahkan bersama pemilik risiko sebelum menjadi "
-            "ketentuan resmi."
+            "Status KRI menggunakan batas HOP tetap: "
+            "Emergency/Merah untuk HOP < 10 hari; "
+            "Siaga/Kuning untuk HOP ≥ 10 sampai dengan "
+            "15 hari; dan Normal/Hijau untuk HOP > 15 hari. "
+            "Batas P20 tetap ditampilkan sebagai indikator "
+            "analitis tambahan."
         )
 
 # ============================================================
