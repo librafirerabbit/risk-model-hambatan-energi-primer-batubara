@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.1-startup-fix"
+APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.2-p20-fallback"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -828,6 +828,37 @@ def load_all_data():
             "Tanggal",
         ],
     )
+
+    # Loss_Event_Detail_v2 tidak wajib menyimpan Batas_HOP_P20.
+    # Jika kolom tersebut tidak tersedia, turunkan parameter P20
+    # langsung dari seluruh observasi HOP harian per unit. Dengan
+    # demikian tab KRI, Analisis HOP-Loss, dan laporan tetap kompatibel.
+    if {
+        "HOP_Unit_Key",
+        "Nilai_HOP",
+    }.issubset(hop.columns):
+        hop_threshold = (
+            hop.dropna(
+                subset=[
+                    "HOP_Unit_Key",
+                    "Nilai_HOP",
+                ]
+            )
+            .groupby("HOP_Unit_Key")["Nilai_HOP"]
+            .quantile(0.20)
+        )
+
+        mapped_threshold = loss["HOP_Unit_Key"].map(
+            hop_threshold
+        )
+
+        if "Batas_HOP_P20" not in loss.columns:
+            loss["Batas_HOP_P20"] = mapped_threshold
+        else:
+            loss["Batas_HOP_P20"] = pd.to_numeric(
+                loss["Batas_HOP_P20"],
+                errors="coerce",
+            ).fillna(mapped_threshold)
 
     return loss, hop
 
