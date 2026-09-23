@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.6-direct-risk-limit"
+APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.7-category-fallback"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -728,20 +728,6 @@ def prepare_loss_event_detail_v2(
     data["Jenis_Kejadian_Loss"] = "EVENT"
     data["Jumlah_Segmen"] = 1
 
-    if "Kategori_Final" not in data.columns:
-        data["Kategori_Final"] = ""
-
-    category = (
-        data["Kategori_Final"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-    )
-    data["Kategori_Final"] = category.mask(
-        category.eq(""),
-        "Belum Diklasifikasikan",
-    )
-
     if "Subkategori_Event" not in data.columns:
         data["Subkategori_Event"] = ""
 
@@ -756,6 +742,30 @@ def prepare_loss_event_detail_v2(
             subcategory.eq(""),
             data["Permasalahan"],
         )
+
+    if "Kategori_Final" not in data.columns:
+        data["Kategori_Final"] = ""
+
+    category = (
+        data["Kategori_Final"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+    subcategory_fallback = (
+        data["Subkategori_Event"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    # Hirarki klasifikasi untuk data event-level:
+    # Kategori_Final -> Subkategori_Event -> Belum Diklasifikasikan.
+    # Permasalahan sudah dipakai untuk melengkapi Subkategori_Event di atas.
+    data["Kategori_Final"] = (
+        category.mask(category.eq(""), subcategory_fallback)
+        .replace("", "Belum Diklasifikasikan")
+    )
 
     required_for_model = [
         LOSS_ID_COLUMN,
@@ -4012,6 +4022,19 @@ with tab_heatmap:
             )
         )
 
+        total_category_count = len(category_risk)
+        if total_category_count > 12:
+            category_risk = (
+                category_risk
+                .nlargest(12, "Total_Loss_Rp")
+                .reset_index(drop=True)
+            )
+            st.caption(
+                "Heat map menampilkan 12 subkategori dengan "
+                "Total Loss Opportunity terbesar dari "
+                f"{total_category_count:,} subkategori pada data terfilter."
+            )
+
         category_count = len(category_risk)
 
         if category_count == 1:
@@ -4095,6 +4118,31 @@ with tab_heatmap:
             for index in range(len(category_risk))
         ]
 
+        # Sebarkan marker yang berada pada sel matriks yang sama agar kode
+        # kategori tidak saling menumpuk dan angka matriks tetap terbaca.
+        category_risk["Plot_X"] = category_risk[
+            "Skala_Dampak"
+        ].astype(float)
+        category_risk["Plot_Y"] = category_risk[
+            "Skala_Kemungkinan"
+        ].astype(float)
+
+        for _, same_cell in category_risk.groupby(
+            ["Skala_Dampak", "Skala_Kemungkinan"]
+        ):
+            count = len(same_cell)
+            angles = (
+                np.linspace(0, 2 * np.pi, count, endpoint=False)
+                + np.pi / 4
+            )
+            radius = 0.24
+            category_risk.loc[same_cell.index, "Plot_X"] += (
+                radius * np.cos(angles)
+            )
+            category_risk.loc[same_cell.index, "Plot_Y"] += (
+                radius * np.sin(angles)
+            )
+
         report_category_risk = category_risk.copy()
 
         risk_colorscale = [
@@ -4152,12 +4200,10 @@ with tab_heatmap:
         heatmap_figure.add_trace(
             go.Scatter(
                 x=(
-                    category_risk["Skala_Dampak"]
-                    + 0.31
+                    category_risk["Plot_X"]
                 ),
                 y=(
-                    category_risk["Skala_Kemungkinan"]
-                    + 0.31
+                    category_risk["Plot_Y"]
                 ),
                 mode="markers+text",
                 marker=dict(
