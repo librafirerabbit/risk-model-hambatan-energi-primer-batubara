@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.2-p20-fallback"
+APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.4-source-risk-limit"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -59,6 +59,7 @@ SPREADSHEET_ID = (
 
 SHEET_LOSS = "Loss_Event_Detail_v2"
 SHEET_HOP = "HOP_Harian"
+SHEET_PARAMETER = "Parameter_Model"
 
 LOSS_ID_COLUMN = "Kejadian_Loss_ID"
 
@@ -790,6 +791,7 @@ def load_all_data():
 
     loss = load_google_sheet(SHEET_LOSS)
     hop = load_google_sheet(SHEET_HOP)
+    parameter = load_google_sheet(SHEET_PARAMETER)
 
     loss = convert_numeric(
         loss,
@@ -860,7 +862,7 @@ def load_all_data():
                 errors="coerce",
             ).fillna(mapped_threshold)
 
-    return loss, hop
+    return loss, hop, parameter
 
 
 # ============================================================
@@ -902,7 +904,7 @@ try:
     with st.spinner(
         "Membaca data Google Sheet publik..."
     ):
-        loss_data, hop_data = load_all_data()
+        loss_data, hop_data, parameter_data = load_all_data()
 
 except Exception as error:
     st.error(
@@ -2531,84 +2533,60 @@ with tab_monte_carlo:
     # RISK LIMIT DINAMIS                    
     # --------------------------------------------------------
 
-    risk_limit_series = pd.Series(dtype=float)
+    parameter_risk_limit_rp = 0.0
 
-    if "Risk_Limit_Rp" in filtered.columns:
-        risk_limit_series = pd.to_numeric(
-            filtered["Risk_Limit_Rp"],
+    if {
+        "Parameter",
+        "Nilai",
+    }.issubset(parameter_data.columns):
+        parameter_name = (
+            parameter_data["Parameter"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.casefold()
+        )
+        parameter_value = pd.to_numeric(
+            parameter_data.loc[
+                parameter_name.eq(
+                    "risk limit korporat"
+                ),
+                "Nilai",
+            ],
             errors="coerce",
         ).dropna()
 
-        risk_limit_series = risk_limit_series[
-            risk_limit_series > 0
+        parameter_value = parameter_value[
+            parameter_value > 0
         ]
 
-    risk_limit_from_data = (
-        float(risk_limit_series.max())
-        if not risk_limit_series.empty
-        else 0.0
-    )
+        if not parameter_value.empty:
+            parameter_risk_limit_rp = float(
+                parameter_value.iloc[0]
+            )
 
-    if "manual_risk_limit_miliar" not in st.session_state:
-        st.session_state.manual_risk_limit_miliar = (
-            risk_limit_from_data / 1_000_000_000
-            if risk_limit_from_data > 0
-            else 1_000.0
+    if parameter_risk_limit_rp <= 0:
+        st.error(
+            "Risk Limit Korporat pada Parameter_Model belum "
+            "tersedia atau nilainya tidak valid."
         )
+        st.stop()
+
+    # Risk Limit hanya berasal dari source file. Tidak ada input
+    # manual agar satuan dan hasil simulasi selalu konsisten.
+    risk_limit_rp = parameter_risk_limit_rp
+    risk_limit_miliar = risk_limit_rp / 1_000_000_000
 
     with st.expander(
-        "⚙️ ",
+        "⚙️ Parameter Risk Limit",
         expanded=False,
     ):
-        available_limit_modes = ["Input manual"]
-
-        if risk_limit_from_data > 0:
-            available_limit_modes.insert(
-                0,
-                "Gunakan nilai dari data",
-            )
-
-        risk_limit_mode = st.radio(
-            "Sumber Risk Limit",
-            options=available_limit_modes,
-            horizontal=True,
-            key="risk_limit_mode",
+        st.caption(
+            "Risk Limit menggunakan nilai "
+            "Parameter_Model!B2 pada source file: "
+            f"{format_compact_rupiah(risk_limit_rp)} "
+            f"({risk_limit_miliar:,.2f} Rp miliar)."
         )
-
-        if risk_limit_mode == "Gunakan nilai dari data":
-            risk_limit_rp = risk_limit_from_data
-            risk_limit_miliar = (
-                risk_limit_rp / 1_000_000_000
-            )
-
-            st.caption(
-                "Risk Limit diambil dari nilai maksimum "
-                "kolom Risk_Limit_Rp pada data terfilter."
-            )
-        else:
-            risk_limit_miliar = st.number_input(
-                "Risk Limit (Rp miliar)",
-                min_value=0.01,
-                value=float(
-                    st.session_state[
-                        "manual_risk_limit_miliar"
-                    ]
-                ),
-                step=10.0,
-                format="%.2f",
-                help=(
-                    "Contoh: 1,600 berarti Risk Limit "
-                    "sebesar Rp1.60 triliun."
-                ),
-                key="manual_risk_limit_input",
-            )
-
-            st.session_state.manual_risk_limit_miliar = (
-                risk_limit_miliar
-            )
-            risk_limit_rp = (
-                risk_limit_miliar * 1_000_000_000
-            )
 
         exceedance_percent = st.slider(
             "Batas Probability of Exceedance "
