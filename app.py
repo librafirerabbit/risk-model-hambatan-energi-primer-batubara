@@ -1,112 +1,96 @@
-                ),
-                "category_rows": category_report_rows,
-            }
+import math
+from datetime import date, timedelta
+from io import BytesIO
+from urllib.parse import quote
 
-            try:
-                st.session_state["prime_risk_pdf"] = (
-                    build_prime_risk_pdf(report_payload)
-                )
-                st.session_state["prime_risk_pdf_name"] = (
-                    "PRIME_RISK_Report_"
-                    + date.today().strftime("%Y%m%d")
-                    + ".pdf"
-                )
-                st.success(
-                    "Laporan PDF berhasil dibuat."
-                )
-            except Exception as report_error:
-                st.error(
-                    "Laporan belum berhasil dibuat: "
-                    + str(report_error)
-                )
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
 
-        if st.session_state.get("prime_risk_pdf"):
-            st.download_button(
-                "Unduh Laporan PDF",
-                data=st.session_state["prime_risk_pdf"],
-                file_name=st.session_state.get(
-                    "prime_risk_pdf_name",
-                    "PRIME_RISK_Report.pdf",
-                ),
-                mime="application/pdf",
-                type="primary",
-                use_container_width=True,
-            )
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
 
-with tab_method:
-    st.markdown(
-        """
-### Identitas model
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
 
-**PRIME-RISK** merupakan singkatan dari **Primary Energy
-Risk Intelligence, Modelling & Evaluation**. Model ini
-mengubah data HOP dan Kejadian Loss menjadi informasi
-frekuensi, severity, distribusi kerugian, probability of
-exceedance, dan posisi risiko pada heat map.
 
-### Definisi Kejadian Loss
+APP_VERSION = "2026.09.23-loss-event-detail-v2-v16"
 
-**Kejadian Loss** adalah satu rangkaian kejadian risiko
-yang menimbulkan kehilangan produksi atau kehilangan
-peluang pendapatan.
+PLOTLY_CONFIG = {
+    "displaylogo": False,
+    "responsive": True,
+}
 
-Beberapa segmen KKP/PLO yang masih merupakan satu
-rangkaian kejadian dapat digabungkan menjadi satu
-Kejadian Loss. Tujuannya adalah mencegah penghitungan
-frekuensi secara berlebihan atau *double counting*.
 
-### Struktur data
+# ============================================================
+# KONFIGURASI APLIKASI
+# ============================================================
 
-1. `Loss_Event_Detail_v2` berfungsi sebagai sumber
-   transaksi event-level dan audit trail.
-2. Lapisan transformasi Python membentuk kolom kalender,
-   identitas kejadian, dan status kesiapan model.
-3. `HOP_Harian` berisi kondisi Hari Operasi
-   Persediaan per unit.
-4. `Kejadian_Loss_ID` menjadi identitas unik setiap
-   Kejadian Loss.
-5. Jika `Kejadian_Loss_ID` belum tersedia, aplikasi
-   menggunakan `Event_ID` sebagai identitas sementara.
+st.set_page_config(
+    page_title="PRIME-RISK | Primary Energy Risk Intelligence",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-### Hubungan HOP dan Kejadian Loss
 
-Nilai HOP digunakan untuk menguji apakah penurunan
-persediaan energi primer meningkatkan kemungkinan
-terjadinya Kejadian Loss.
+# ============================================================
+# KONFIGURASI SUMBER DATA
+# ============================================================
 
-Model dapat memisahkan frekuensi kejadian berdasarkan:
+SPREADSHEET_ID = (
+    "1NGn-bwo12bGiksqKzyZ1J1968w3ILORv-Pr49OnZHG0"
+)
 
-- HOP rendah;
-- HOP normal;
-- unit pembangkit;
-- regional;
-- kategori risiko; dan
-- periode waktu.
+SHEET_LOSS = "Loss_Event_Detail_v2"
+SHEET_HOP = "HOP_Harian"
 
-### Pengembangan model berikutnya
+LOSS_ID_COLUMN = "Kejadian_Loss_ID"
 
-Data ini dapat digunakan untuk:
 
-- estimasi frekuensi Kejadian Loss;
-- distribusi severity;
-- simulasi Monte Carlo annual loss;
-- P50, P90, dan P95;
-- probability of exceedance;
-- risk heat map; dan
-- rekomendasi mitigasi berbasis HOP.
-"""
+MONTH_LABELS = {
+    1: "Jan",
+    2: "Feb",
+    3: "Mar",
+    4: "Apr",
+    5: "May",
+    6: "Jun",
+    7: "Jul",
+    8: "Aug",
+    9: "Sep",
+    10: "Oct",
+    11: "Nov",
+    12: "Dec",
+}
+
+
+def google_sheet_csv_url(sheet_name: str) -> str:
+    """Membentuk URL CSV untuk tab Google Sheet publik."""
+
+    encoded_sheet = quote(sheet_name)
+
+    return (
+        f"https://docs.google.com/spreadsheets/d/"
+        f"{SPREADSHEET_ID}/gviz/tq"
+        f"?tqx=out:csv&sheet={encoded_sheet}"
     )
 
 
 # ============================================================
-# FOOTER
+# FORMAT ANGKA
 # ============================================================
-
-st.divider()
-
-st.caption(
-    "PRIME-RISK · Primary Energy Risk Intelligence, "
-    "Modelling & Evaluation · "
-    "Sumber data Google Sheet publik · "
-    f"Versi {APP_VERSION}"
-)
