@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.7-category-fallback"
+APP_VERSION = "2026.09.23-v16.8-chart-contrast"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -1533,7 +1533,14 @@ with tab_summary:
                 ),
             },
             color="Jumlah_Kejadian",
-            color_continuous_scale="Blues",
+            # Hindari warna hampir putih agar seluruh batang tetap terlihat,
+            # termasuk subkategori dengan jumlah kejadian yang kecil.
+            color_continuous_scale=[
+                [0.00, "#38BDF8"],
+                [0.35, "#0EA5E9"],
+                [0.70, "#2563EB"],
+                [1.00, "#172554"],
+            ],
         )
 
         figure_category.update_layout(
@@ -1543,6 +1550,25 @@ with tab_summary:
                 r=20,
                 t=60,
                 b=20,
+            ),
+            plot_bgcolor="rgba(15, 23, 42, 0.035)",
+            coloraxis_colorbar=dict(
+                title="Jumlah<br>Kejadian",
+                thickness=16,
+                outlinewidth=1,
+                outlinecolor="#64748B",
+            ),
+        )
+
+        figure_category.update_traces(
+            marker_line_color="#0F172A",
+            marker_line_width=0.8,
+            opacity=0.96,
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Loss Opportunity: Rp%{x:,.0f}<br>"
+                "Jumlah Kejadian: %{marker.color:,.0f}"
+                "<extra></extra>"
             ),
         )
 
