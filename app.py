@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.4-source-risk-limit"
+APP_VERSION = "2026.09.23-loss-event-detail-v2-v16.5-dashboard-fix"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -60,6 +60,7 @@ SPREADSHEET_ID = (
 SHEET_LOSS = "Loss_Event_Detail_v2"
 SHEET_HOP = "HOP_Harian"
 SHEET_PARAMETER = "Parameter_Model"
+SHEET_MAPPING = "Mapping_Unit"
 
 LOSS_ID_COLUMN = "Kejadian_Loss_ID"
 
@@ -622,11 +623,22 @@ def convert_dates(
 
     for column in columns:
         if column in data.columns:
-            data[column] = pd.to_datetime(
+            parsed = pd.to_datetime(
                 data[column],
                 errors="coerce",
                 dayfirst=True,
+                format="mixed",
             )
+
+            # Enam record PLTU Kendari pada sumber tertulis tahun 2000,
+            # padahal urutan event dan baris di sekitarnya adalah Des-2025.
+            # Koreksi defensif ini mencegah sumbu tren tertarik ke tahun 2000.
+            year_2000 = parsed.dt.year.eq(2000)
+            parsed.loc[year_2000] = (
+                parsed.loc[year_2000] + pd.DateOffset(years=25)
+            )
+
+            data[column] = parsed
 
     return data
 
@@ -792,6 +804,7 @@ def load_all_data():
     loss = load_google_sheet(SHEET_LOSS)
     hop = load_google_sheet(SHEET_HOP)
     parameter = load_google_sheet(SHEET_PARAMETER)
+    mapping = load_google_sheet(SHEET_MAPPING)
 
     loss = convert_numeric(
         loss,
@@ -815,6 +828,50 @@ def load_all_data():
 
     if SHEET_LOSS == "Loss_Event_Detail_v2":
         loss = prepare_loss_event_detail_v2(loss)
+
+        # Regional pada sebagian event SUMKAL masih kosong di tab v2.
+        # Isi hanya nilai kosong dengan referensi resmi Mapping_Unit.
+        if {
+            "Unit_Asli",
+            "Regional",
+        }.issubset(mapping.columns):
+            unit_region = (
+                mapping.dropna(subset=["Unit_Asli", "Regional"])
+                .drop_duplicates(subset=["Unit_Asli"])
+                .set_index("Unit_Asli")["Regional"]
+            )
+            source_region = loss["Unit_Asli"].map(unit_region)
+            current_region = (
+                loss["Regional"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+            )
+            loss["Regional"] = current_region.mask(
+                current_region.eq(""),
+                source_region,
+            )
+
+            # Fallback kedua untuk variasi penulisan Unit_Asli yang belum
+            # persis sama, menggunakan HOP_Unit_Key yang sudah dipetakan.
+            if "HOP_Unit_Key" in mapping.columns:
+                key_region = (
+                    mapping.dropna(
+                        subset=["HOP_Unit_Key", "Regional"]
+                    )
+                    .drop_duplicates(subset=["HOP_Unit_Key"])
+                    .set_index("HOP_Unit_Key")["Regional"]
+                )
+                remaining_region = (
+                    loss["Regional"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                )
+                loss["Regional"] = remaining_region.mask(
+                    remaining_region.eq(""),
+                    loss["HOP_Unit_Key"].map(key_region),
+                )
 
     hop = convert_numeric(
         hop,
@@ -1400,10 +1457,32 @@ with tab_summary:
     col3, col4 = st.columns(2)
 
     with col3:
+        # Pada Loss_Event_Detail_v2, Kategori_Final masih kosong untuk
+        # seluruh record. Untuk ringkasan operasional gunakan subkategori
+        # event yang memang tersedia, sehingga grafik tidak menjadi satu
+        # batang besar "Belum Diklasifikasikan".
+        summary_category_column = (
+            "Subkategori_Event"
+            if (
+                SHEET_LOSS == "Loss_Event_Detail_v2"
+                and "Subkategori_Event" in filtered.columns
+            )
+            else "Kategori_Final"
+        )
+
+        category_source = filtered.copy()
+        category_source[summary_category_column] = (
+            category_source[summary_category_column]
+            .fillna("Belum Diklasifikasikan")
+            .astype(str)
+            .str.strip()
+            .replace("", "Belum Diklasifikasikan")
+        )
+
         category_summary = (
-            filtered
+            category_source
             .groupby(
-                "Kategori_Final",
+                summary_category_column,
                 as_index=False,
             )
             .agg(
@@ -1420,18 +1499,22 @@ with tab_summary:
                 "Loss_Opportunity_Rp",
                 ascending=True,
             )
+            .tail(15)
         )
 
         figure_category = px.bar(
             category_summary,
             x="Loss_Opportunity_Rp",
-            y="Kategori_Final",
+            y=summary_category_column,
             orientation="h",
             title=(
-                "Loss Opportunity per Kategori"
+                "Top 15 Loss Opportunity per Subkategori"
+                if summary_category_column == "Subkategori_Event"
+                else "Loss Opportunity per Kategori"
             ),
             labels={
                 "Kategori_Final": "Kategori",
+                "Subkategori_Event": "Subkategori Event",
                 "Loss_Opportunity_Rp": (
                     "Loss Opportunity (Rp)"
                 ),
