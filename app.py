@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.23-v16.8-chart-contrast"
+APP_VERSION = "2026.09.24-v16.9-validation-coverage-narrative"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -4693,6 +4693,38 @@ with tab_validation:
             subset=["Start_DateTime"]
         )
 
+    # Pasangkan setiap kejadian dengan observasi HOP pada tanggal dan unit
+    # yang sama. Nilai_HOP berasal dari HOP_Harian, bukan dari tabel loss.
+    dated_validation_loss["_Tanggal_Validasi"] = pd.to_datetime(
+        dated_validation_loss["Start_DateTime"],
+        errors="coerce",
+    ).dt.normalize()
+
+    hop_validation = filtered_hop[
+        ["Tanggal", "HOP_Unit_Key", "Nilai_HOP"]
+    ].copy()
+    hop_validation["Tanggal"] = pd.to_datetime(
+        hop_validation["Tanggal"],
+        errors="coerce",
+    ).dt.normalize()
+    hop_validation = (
+        hop_validation
+        .dropna(subset=["Tanggal", "HOP_Unit_Key"])
+        .groupby(["Tanggal", "HOP_Unit_Key"], as_index=False)
+        .agg(Nilai_HOP=("Nilai_HOP", "mean"))
+    )
+
+    dated_validation_loss = dated_validation_loss.drop(
+        columns=["Nilai_HOP"],
+        errors="ignore",
+    ).merge(
+        hop_validation,
+        left_on=["_Tanggal_Validasi", "HOP_Unit_Key"],
+        right_on=["Tanggal", "HOP_Unit_Key"],
+        how="left",
+        validate="many_to_one",
+    )
+
     total_dated_events = int(
         dated_validation_loss[LOSS_ID_COLUMN].nunique()
     )
@@ -4768,6 +4800,24 @@ with tab_validation:
         format_number(negative_hop_records),
     )
 
+    stored_backtest = st.session_state.get(
+        "rolling_backtest_summary_v16_9"
+    )
+    if stored_backtest:
+        backtest_validation_result = (
+            f"{stored_backtest['periods']} periode; "
+            f"P90 coverage {stored_backtest['p90_coverage']:.2f}%; "
+            f"error P50 {stored_backtest['mean_error']:.2f}%"
+        )
+        backtest_validation_status = stored_backtest["status"]
+        backtest_validation_action = stored_backtest["action"]
+    else:
+        backtest_validation_result = "Tersedia pada bagian di bawah"
+        backtest_validation_status = "SIAP DIJALANKAN"
+        backtest_validation_action = (
+            "Jalankan rolling backtesting untuk unit dan periode terpilih"
+        )
+
     validation_rows = [
         {
             "Area_Validasi": "Kelengkapan pasangan Loss–HOP",
@@ -4793,7 +4843,11 @@ with tab_validation:
                 if mapping_coverage >= 0.95
                 else "PERLU PERBAIKAN"
             ),
-            "Tindak_Lanjut": "Verifikasi unit yang belum terpetakan",
+            "Tindak_Lanjut": (
+                "Pertahankan konsistensi mapping dan validasi unit baru"
+                if mapping_coverage >= 0.95
+                else "Verifikasi dan lengkapi unit yang belum terpetakan"
+            ),
         },
         {
             "Area_Validasi": "Duplikasi HOP",
@@ -4870,11 +4924,9 @@ with tab_validation:
         {
             "Area_Validasi": "Backtesting temporal",
             "Indikator": "Aktual dibanding prediksi periode berikutnya",
-            "Hasil": "Belum dilakukan",
-            "Status": "WAJIB DILENGKAPI",
-            "Tindak_Lanjut": (
-                "Pisahkan training dan validation berdasarkan waktu"
-            ),
+            "Hasil": backtest_validation_result,
+            "Status": backtest_validation_status,
+            "Tindak_Lanjut": backtest_validation_action,
         },
         {
             "Area_Validasi": "Konvergensi Monte Carlo",
@@ -4925,6 +4977,9 @@ with tab_validation:
             [
                 "PERLU PERBAIKAN",
                 "DATA TERBATAS",
+                "CUKUP / PERLU KALIBRASI",
+                "PERLU KALIBRASI",
+                "LEMAH / PERLU PENGEMBANGAN",
             ]
         ).sum()
     )
@@ -4944,14 +4999,20 @@ with tab_validation:
             "pemeriksaan yang tersedia."
         )
     else:
+        validation_pending = [
+            "uji distribusi pembanding",
+            "konvergensi Monte Carlo",
+            "validasi nilai HOP negatif",
+        ]
+        if not stored_backtest:
+            validation_pending.insert(0, "rolling backtesting temporal")
         st.warning(
             "Kesimpulan validasi awal: PRIME-RISK dapat "
             "digunakan untuk eksplorasi dan pengambilan "
             "keputusan pendahuluan, tetapi belum dinyatakan "
-            "tervalidasi penuh. Backtesting temporal, uji "
-            "distribusi pembanding, konvergensi Monte Carlo, "
-            "dan validasi nilai HOP negatif masih harus "
-            "diselesaikan."
+            "tervalidasi penuh. Area yang masih perlu ditutup: "
+            + ", ".join(validation_pending)
+            + "."
         )
 
     with st.expander(
@@ -5091,14 +5152,53 @@ with tab_validation:
                     f"{kri_accuracy:,.2f}%" if not pd.isna(kri_accuracy) else "-",
                 )
 
-                if not pd.isna(mean_error) and mean_error <= 20 and p90_coverage >= 80:
-                    st.success("Status backtesting: BAIK / LAYAK.")
-                elif not pd.isna(mean_error) and mean_error <= 35 and p90_coverage >= 60:
-                    st.warning("Status backtesting: CUKUP / LAYAK DENGAN KALIBRASI.")
+                if (
+                    not pd.isna(mean_error)
+                    and mean_error <= 20
+                    and p90_coverage >= 80
+                ):
+                    backtest_status = "BAIK / LAYAK"
+                    backtest_action = (
+                        "Pertahankan performa dan lakukan pemantauan berkala"
+                    )
+                    st.success(f"Status backtesting: {backtest_status}.")
+                elif (
+                    not pd.isna(mean_error)
+                    and mean_error <= 35
+                    and p90_coverage >= 60
+                ):
+                    backtest_status = "CUKUP / PERLU KALIBRASI"
+                    backtest_action = (
+                        "Kalibrasi parameter dan ulangi pengujian temporal"
+                    )
+                    st.warning(f"Status backtesting: {backtest_status}.")
                 elif not pd.isna(mean_error) and mean_error <= 50:
-                    st.warning("Status backtesting: PERLU KALIBRASI.")
+                    backtest_status = "PERLU KALIBRASI"
+                    backtest_action = (
+                        "Kalibrasi model frekuensi dan severity"
+                    )
+                    st.warning(f"Status backtesting: {backtest_status}.")
                 else:
-                    st.error("Status backtesting: LEMAH / PERLU PENGEMBANGAN.")
+                    backtest_status = "LEMAH / PERLU PENGEMBANGAN"
+                    backtest_action = (
+                        "Kalibrasi ulang model frekuensi dan severity"
+                    )
+                    st.error(f"Status backtesting: {backtest_status}.")
+
+                st.session_state["rolling_backtest_summary_v16_9"] = {
+                    "periods": int(len(backtest_result)),
+                    "p90_coverage": p90_coverage,
+                    "mean_error": (
+                        mean_error if not pd.isna(mean_error) else 0.0
+                    ),
+                    "frequency_mae": frequency_mae,
+                    "kri_accuracy": (
+                        kri_accuracy if not pd.isna(kri_accuracy) else 0.0
+                    ),
+                    "status": backtest_status,
+                    "action": backtest_action,
+                    "unit": backtest_unit,
+                }
 
                 plot_backtest = backtest_result.sort_values("Periode_Uji").copy()
                 plot_backtest["Periode"] = plot_backtest[
