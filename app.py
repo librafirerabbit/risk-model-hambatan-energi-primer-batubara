@@ -31,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.23-banded-tables"
+APP_VERSION = "2026.09.24-v16.24-toolbar-restored"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -298,7 +298,15 @@ div[data-testid="stTable"] tbody tr:nth-child(odd) {{
 }}
 div.stButton > button {{min-height:2.3rem!important;padding:.28rem .72rem!important;}}
 hr {{margin:.55rem 0!important;}}
-#MainMenu, footer {{visibility:hidden;}}
+#MainMenu {{
+    visibility:visible!important;
+    display:block!important;
+}}
+button[data-testid="stMainMenu"] {{
+    visibility:visible!important;
+    display:flex!important;
+}}
+footer {{visibility:hidden;}}
 
 @media (max-width:1366px) {{
     .block-container {{
