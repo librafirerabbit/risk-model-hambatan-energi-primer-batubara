@@ -31,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.17-corporate-logo-header"
+APP_VERSION = "2026.09.24-v16.18-danantara-png-fix"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -57,7 +57,7 @@ st.set_page_config(
 
 APP_DIR = Path(__file__).resolve().parent
 ASSET_DIR = APP_DIR / "assets"
-DANANTARA_LOGO = ASSET_DIR / "Danantara_Indonesia_(no_SW).svg"
+DANANTARA_LOGO = ASSET_DIR / "Logo Danantara Indonesia.png"
 PLN_NP_LOGO = ASSET_DIR / "Logo PLN Nusantara Power.png"
 
 
