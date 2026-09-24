@@ -1,6 +1,8 @@
 import math
+import base64
 from datetime import date, timedelta
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import quote
 
 import numpy as np
@@ -29,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.16"
+APP_VERSION = "2026.09.24-v16.17-corporate-logo-header"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -47,6 +49,123 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+
+# ============================================================
+# IDENTITAS DAN HEADER KORPORAT
+# ============================================================
+
+APP_DIR = Path(__file__).resolve().parent
+ASSET_DIR = APP_DIR / "assets"
+DANANTARA_LOGO = ASSET_DIR / "Danantara_Indonesia_(no_SW).svg"
+PLN_NP_LOGO = ASSET_DIR / "Logo PLN Nusantara Power.png"
+
+
+def image_data_uri(file_path: Path) -> str:
+    """Mengubah gambar lokal menjadi data URI untuk HTML Streamlit."""
+
+    if not file_path.exists():
+        return ""
+
+    mime_type = (
+        "image/svg+xml"
+        if file_path.suffix.lower() == ".svg"
+        else "image/png"
+    )
+    encoded = base64.b64encode(
+        file_path.read_bytes()
+    ).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def render_prime_risk_header() -> None:
+    """Menampilkan identitas Danantara, PRIME-RISK, dan PLN NP."""
+
+    danantara_uri = image_data_uri(DANANTARA_LOGO)
+    pln_np_uri = image_data_uri(PLN_NP_LOGO)
+    danantara_html = (
+        f'<img src="{danantara_uri}" alt="Danantara Indonesia">'
+        if danantara_uri else ""
+    )
+    pln_np_html = (
+        f'<img src="{pln_np_uri}" alt="PLN Nusantara Power">'
+        if pln_np_uri else ""
+    )
+
+    st.markdown(
+        f"""
+<style>
+.prime-corporate-header {{
+    display:grid;
+    grid-template-columns:minmax(170px,240px) 1fr minmax(220px,310px);
+    align-items:center;
+    gap:24px;
+    padding:14px 18px 18px;
+    margin:0 0 18px;
+    background:#ffffff;
+    border:1px solid #dce5ef;
+    border-top:5px solid #00a2e1;
+    border-radius:0 0 14px 14px;
+    box-shadow:0 6px 20px rgba(15,42,77,.07);
+}}
+.prime-corporate-logo {{display:flex;align-items:center;}}
+.prime-corporate-logo.left {{justify-content:flex-start;}}
+.prime-corporate-logo.right {{justify-content:flex-end;}}
+.prime-corporate-logo.left img {{
+    width:205px;max-width:100%;max-height:66px;object-fit:contain;
+}}
+.prime-corporate-logo.right img {{
+    width:275px;max-width:100%;max-height:72px;object-fit:contain;
+}}
+.prime-brand-title {{min-width:0;text-align:center;}}
+.prime-brand-title h1 {{
+    margin:0;color:#172f55;font-size:clamp(30px,3vw,44px);
+    line-height:1.05;font-weight:800;letter-spacing:1.5px;
+}}
+.prime-brand-title p {{
+    margin:7px 0 0;color:#5c708c;font-size:clamp(12px,1.15vw,16px);
+    line-height:1.35;font-weight:500;
+}}
+.prime-model-caption {{
+    margin:-4px 0 20px;padding:0 8px;color:#64748b;
+    text-align:center;font-size:14px;line-height:1.55;
+}}
+@media (max-width:900px) {{
+    .prime-corporate-header {{grid-template-columns:1fr 1fr;gap:14px;}}
+    .prime-brand-title {{grid-column:1/-1;grid-row:1;}}
+    .prime-corporate-logo.left {{grid-column:1;grid-row:2;justify-content:center;}}
+    .prime-corporate-logo.right {{grid-column:2;grid-row:2;justify-content:center;}}
+    .prime-corporate-logo.left img {{width:155px;max-height:54px;}}
+    .prime-corporate-logo.right img {{width:205px;max-height:58px;}}
+}}
+@media print {{
+    .prime-corporate-header {{
+        display:grid!important;grid-template-columns:180px 1fr 230px;
+        padding:8px 10px 12px;margin-bottom:12px;box-shadow:none;
+        break-inside:avoid;page-break-inside:avoid;
+    }}
+    .prime-corporate-logo.left img {{width:155px;max-height:50px;}}
+    .prime-corporate-logo.right img {{width:205px;max-height:55px;}}
+    .prime-brand-title h1 {{font-size:28px;}}
+    .prime-brand-title p,.prime-model-caption {{font-size:11px;}}
+}}
+</style>
+<section class="prime-corporate-header">
+  <div class="prime-corporate-logo left">{danantara_html}</div>
+  <div class="prime-brand-title">
+    <h1>PRIME-RISK</h1>
+    <p>Primary Energy Risk Intelligence, Modelling &amp; Evaluation</p>
+  </div>
+  <div class="prime-corporate-logo right">{pln_np_html}</div>
+</section>
+<div class="prime-model-caption">
+  Model prediktif khusus kejadian hambatan energi primer batubara pada lima
+  subkategori terpilih, berbasis HOP, Kejadian Loss, asosiasi statistik,
+  BETA-PERT, Monte Carlo, probability of exceedance, dan risk heat map.
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 # ============================================================
@@ -1472,20 +1591,7 @@ if selected_units:
 # HEADER DASHBOARD
 # ============================================================
 
-st.title(
-    "PRIME-RISK"
-)
-
-st.subheader(
-    "Primary Energy Risk Intelligence, Modelling & Evaluation"
-)
-
-st.caption(
-    "Model prediktif khusus kejadian hambatan energi primer "
-    "batubara pada lima subkategori terpilih, berbasis HOP, Kejadian Loss, asosiasi "
-    "statistik, BETA-PERT, Monte Carlo, probability "
-    "of exceedance, dan risk heat map."
-)
+render_prime_risk_header()
 
 # ============================================================
 # KPI UTAMA
