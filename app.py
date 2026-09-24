@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.15-sumkal-category-alias"
+APP_VERSION = "2026.09.24-v16.16-event-id-sumkal-fix"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -62,7 +62,10 @@ SHEET_HOP = "HOP_Harian"
 SHEET_PARAMETER = "Parameter_Model"
 SHEET_MAPPING = "Mapping_Unit"
 
-LOSS_ID_COLUMN = "Kejadian_Loss_ID"
+# Satu baris pada Loss_Event_Detail_v2 merupakan satu kejadian individual.
+# Karena itu Event_ID menjadi identitas primer untuk seluruh perhitungan,
+# validasi duplikasi, backtesting, tabel audit, dan laporan.
+LOSS_ID_COLUMN = "Event_ID"
 
 
 # Scope kompetisi yang disepakati: hanya lima subkategori hambatan energi
@@ -859,22 +862,13 @@ def prepare_loss_event_detail_v2(
     data["Tahun"] = start_time.dt.year.astype("Int64")
     data["Bulan"] = start_time.dt.month.map(MONTH_LABELS)
 
-    # Pada v2 satu baris dimaksudkan sebagai satu entry loss event.
-    # ID lama tetap dipakai jika tersedia; bila kosong gunakan Event_ID.
-    existing_loss_id = data.get(
-        LOSS_ID_COLUMN,
-        pd.Series("", index=data.index, dtype="object"),
-    ).fillna("").astype(str).str.strip()
-
+    # Pada v2 satu baris dimaksudkan sebagai satu entry loss event dan
+    # Event_ID adalah identitas primer tunggal pada seluruh model.
     event_id = data.get(
         "Event_ID",
         pd.Series("", index=data.index, dtype="object"),
     ).fillna("").astype(str).str.strip()
-
-    data[LOSS_ID_COLUMN] = existing_loss_id.mask(
-        existing_loss_id.eq(""),
-        event_id,
-    )
+    data[LOSS_ID_COLUMN] = event_id
 
     # Kolom kompatibilitas yang sebelumnya tersedia di Loss_Event_Model.
     data["Jenis_Kejadian_Loss"] = "EVENT"
@@ -1095,6 +1089,17 @@ def load_all_data():
                     loss["HOP_Unit_Key"].map(key_region),
                 )
 
+        # Seragamkan penulisan regional agar spasi tersembunyi dan variasi
+        # huruf besar-kecil tidak membuat regional terpisah atau menghilang.
+        if "Regional" in loss.columns:
+            loss["Regional"] = (
+                loss["Regional"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .str.upper()
+            )
+
         loss = apply_primary_energy_scope(loss)
 
     hop = convert_numeric(
@@ -1279,21 +1284,32 @@ selected_years = st.sidebar.multiselect(
     "Tahun",
     options=available_years,
     default=available_years,
+    key="filter_years_v16_16",
 )
 
 
-regional_options = sorted(
+regional_available = set(
     loss_data["Regional"]
     .dropna()
     .astype(str)
-    .unique()
+    .str.strip()
+    .str.upper()
     .tolist()
+)
+regional_options = [
+    regional
+    for regional in ["JAMALI", "SUMKAL", "SULMAPANA"]
+    if regional in regional_available
+]
+regional_options += sorted(
+    regional_available.difference(regional_options)
 )
 
 selected_regionals = st.sidebar.multiselect(
     "Regional",
     options=regional_options,
     default=regional_options,
+    key="filter_regionals_v16_16",
 )
 
 
@@ -1309,11 +1325,12 @@ selected_units = st.sidebar.multiselect(
     "Unit",
     options=unit_options,
     default=unit_options,
+    key="filter_units_v16_16",
 )
 
 
 category_options = sorted(
-    loss_data["Kategori_Final"]
+    loss_data["Subkategori_Event"]
     .dropna()
     .astype(str)
     .unique()
@@ -1321,9 +1338,10 @@ category_options = sorted(
 )
 
 selected_categories = st.sidebar.multiselect(
-    "Kategori / subkategori event",
+    "Subkategori event",
     options=category_options,
     default=category_options,
+    key="filter_subcategories_v16_16",
 )
 
 
@@ -1354,6 +1372,7 @@ selected_readiness = st.sidebar.multiselect(
     "Kesiapan model",
     options=readiness_options,
     default=default_readiness,
+    key="filter_readiness_v16_16",
 )
 
 
@@ -1412,7 +1431,7 @@ if selected_units:
 
 if selected_categories:
     filtered = filtered[
-        filtered["Kategori_Final"].isin(
+        filtered["Subkategori_Event"].isin(
             selected_categories
         )
     ]
@@ -1554,7 +1573,7 @@ st.success(
 
 # Penampung hasil antar-tab untuk laporan PDF.
 report_monte_carlo = st.session_state.get(
-    "report_monte_carlo_v16_15_sumkal_alias",
+    "report_monte_carlo_v16_16_event_id_sumkal",
     {},
 )
 report_prediction = {}
@@ -3225,7 +3244,7 @@ with tab_monte_carlo:
             # Pertahankan hasil simulasi lintas-rerun agar bagian Monte Carlo
             # tetap masuk ke PDF saat tombol pembuatan laporan ditekan.
             st.session_state[
-                "report_monte_carlo_v16_15_sumkal_alias"
+                "report_monte_carlo_v16_16_event_id_sumkal"
             ] = report_monte_carlo
 
             (
@@ -3626,7 +3645,7 @@ with tab_stress_test:
     scenario_name = st.selectbox(
         "Skenario stress test",
         options=list(stress_scenarios),
-        key="stress_scenario_v16_15",
+        key="stress_scenario_v16_16",
     )
     scenario_defaults = stress_scenarios[scenario_name]
 
@@ -3664,7 +3683,7 @@ with tab_stress_test:
             max_value=100_000,
             value=10_000,
             step=1_000,
-            key="stress_iterations_v16_15",
+            key="stress_iterations_v16_16",
         )
 
     st.info("**Asumsi skenario:** " + scenario_defaults["assumption"])
@@ -3675,14 +3694,14 @@ with tab_stress_test:
         max_value=999_999,
         value=2026,
         step=1,
-        key="stress_seed_v16_15",
+        key="stress_seed_v16_16",
     )
 
     run_stress_test = st.button(
         "Jalankan Stress Test",
         type="primary",
         use_container_width=True,
-        key="run_stress_test_v16_15",
+        key="run_stress_test_v16_16",
     )
 
     if run_stress_test:
@@ -3760,7 +3779,7 @@ with tab_stress_test:
                     result["risk_score"]
                 )
 
-            st.session_state["stress_test_v16_15"] = {
+            st.session_state["stress_test_v16_16"] = {
                 "scenario": scenario_name,
                 "frequency_multiplier": float(frequency_multiplier),
                 "severity_multiplier": float(severity_multiplier),
@@ -3770,7 +3789,7 @@ with tab_stress_test:
         except Exception as stress_error:
             st.error("Stress test belum berhasil: " + str(stress_error))
 
-    stored_stress = st.session_state.get("stress_test_v16_15")
+    stored_stress = st.session_state.get("stress_test_v16_16")
     if stored_stress:
         baseline_result = stored_stress["baseline"]
         stress_result = stored_stress["stress"]
@@ -5516,7 +5535,7 @@ with tab_validation:
     )
 
     stored_backtest = st.session_state.get(
-        "rolling_backtest_summary_v16_15_sumkal_alias"
+        "rolling_backtest_summary_v16_16_event_id_sumkal"
     )
     if stored_backtest:
         backtest_validation_result = (
@@ -5904,7 +5923,7 @@ with tab_validation:
                         "severity agar rentang prediksi semakin representatif."
                     )
 
-                st.session_state["rolling_backtest_summary_v16_15_sumkal_alias"] = {
+                st.session_state["rolling_backtest_summary_v16_16_event_id_sumkal"] = {
                     "periods": int(len(backtest_result)),
                     "p90_coverage": p90_coverage,
                     "mean_error": (
@@ -6078,9 +6097,8 @@ with tab_loss:
     st.subheader("Data Kejadian Loss")
 
     st.caption(
-        "Satu Kejadian Loss dapat terdiri dari "
-        "satu atau beberapa segmen KKP/PLO yang "
-        "berkesinambungan."
+        "Setiap baris merepresentasikan satu event individual dengan "
+        "Event_ID sebagai identitas unik utama model."
     )
 
     display_columns = [
@@ -6140,7 +6158,7 @@ with tab_loss:
         column_config={
             LOSS_ID_COLUMN: (
                 st.column_config.TextColumn(
-                    "Kejadian Loss ID",
+                    "Event ID",
                     width="medium",
                 )
             ),
@@ -6606,7 +6624,7 @@ with tab_quality:
     )
 
     quality2.metric(
-        "Duplikasi Kejadian Loss ID",
+        "Duplikasi Event ID",
         format_number(duplicate_loss_id),
     )
 
@@ -6776,7 +6794,7 @@ with tab_report:
 
             stress_report_rows = []
             report_stress_test = st.session_state.get(
-                "stress_test_v16_15"
+                "stress_test_v16_16"
             )
             if report_stress_test:
                 report_stress_baseline = report_stress_test["baseline"]
@@ -7046,14 +7064,11 @@ exceedance, dan posisi risiko pada heat map.
 
 ### Definisi Kejadian Loss
 
-**Kejadian Loss** adalah satu rangkaian kejadian risiko
-yang menimbulkan kehilangan produksi atau kehilangan
-peluang pendapatan.
-
-Beberapa segmen KKP/PLO yang masih merupakan satu
-rangkaian kejadian dapat digabungkan menjadi satu
-Kejadian Loss. Tujuannya adalah mencegah penghitungan
-frekuensi secara berlebihan atau *double counting*.
+**Kejadian Loss** adalah satu event individual yang
+menimbulkan kehilangan produksi atau kehilangan peluang
+pendapatan. Setiap baris pada `Loss_Event_Detail_v2`
+dihitung sebagai satu event dan diidentifikasi dengan
+`Event_ID`.
 
 ### Struktur data
 
@@ -7063,10 +7078,9 @@ frekuensi secara berlebihan atau *double counting*.
    identitas kejadian, dan status kesiapan model.
 3. `HOP_Harian` berisi kondisi Hari Operasi
    Persediaan per unit.
-4. `Kejadian_Loss_ID` menjadi identitas unik setiap
-   Kejadian Loss.
-5. Jika `Kejadian_Loss_ID` belum tersedia, aplikasi
-   menggunakan `Event_ID` sebagai identitas sementara.
+4. `Event_ID` menjadi identitas unik utama setiap event.
+5. Validasi duplikasi, perhitungan frekuensi, analisis,
+   backtesting, dan pelaporan menggunakan `Event_ID`.
 
 ### Cakupan analitik
 
