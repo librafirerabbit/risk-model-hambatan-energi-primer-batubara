@@ -31,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.20-header-safe-area"
+APP_VERSION = "2026.09.24-v16.21-spaced-tabs"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -158,12 +158,25 @@ div[data-testid="stMetricValue"] {{
     font-size:clamp(1.2rem,1.65vw,1.7rem)!important;line-height:1.08!important;
 }}
 div[data-testid="stMetricDelta"] {{font-size:.72rem!important;}}
-div[data-testid="stTabs"] button {{
-    min-height:2.25rem!important;padding:.35rem .62rem!important;
-    font-size:.8rem!important;white-space:nowrap;
-}}
 div[data-testid="stTabs"] div[role="tablist"] {{
-    gap:.08rem!important;overflow-x:auto;scrollbar-width:thin;
+    gap:.55rem!important;
+    overflow-x:auto!important;
+    overflow-y:hidden!important;
+    scrollbar-width:thin;
+    padding:0 .15rem .12rem!important;
+}}
+div[data-testid="stTabs"] button,
+div[data-testid="stTabs"] button[data-baseweb="tab"] {{
+    min-height:2.3rem!important;
+    min-width:max-content!important;
+    padding:.38rem .78rem!important;
+    margin:0!important;
+    border-radius:8px 8px 0 0!important;
+    font-size:.8rem!important;
+    white-space:nowrap!important;
+}}
+div[data-testid="stTabs"] button:hover {{
+    background:rgba(0,162,225,.07)!important;
 }}
 div[data-testid="stExpander"] details summary {{padding:.48rem .7rem!important;}}
 div[data-testid="stSelectbox"],
