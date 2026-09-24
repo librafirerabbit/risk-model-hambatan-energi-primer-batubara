@@ -31,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.26-seamless-loss-tab"
+APP_VERSION = "2026.09.24-v16.27-seamless-loss-hop"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -7055,30 +7055,220 @@ with tab_hop:
             },
         )
 
-    st.subheader(
-        "Detail Observasi HOP Harian"
+    # --------------------------------------------------------
+    # DETAIL HOP HARIAN — PAGINATION / LAZY DISPLAY
+    # --------------------------------------------------------
+    st.subheader("Detail Observasi HOP Harian")
+
+    st.caption(
+        "Tabel detail menggunakan pagination agar browser tidak perlu "
+        "merender seluruh observasi HOP sekaligus."
     )
 
+    hop_detail = filtered_hop.copy()
+
+    # Urutkan data hanya sekali sebelum pagination.
+    hop_sort_columns = [
+        column
+        for column in ["Tanggal", "HOP_Unit_Key"]
+        if column in hop_detail.columns
+    ]
+    if hop_sort_columns:
+        hop_detail = hop_detail.sort_values(
+            hop_sort_columns,
+            ascending=[False] + [True] * (len(hop_sort_columns) - 1),
+            kind="mergesort",
+        )
+
+    hop_search_col, hop_page_size_col = st.columns(
+        [3.2, 1.0],
+        gap="small",
+    )
+
+    with hop_search_col:
+        hop_search = st.text_input(
+            "Cari observasi HOP",
+            placeholder=(
+                "Cari tanggal, unit, tahun, bulan, atau nilai HOP..."
+            ),
+            key="hop_quick_search_v16_27",
+        ).strip()
+
+    with hop_page_size_col:
+        hop_rows_per_page = st.selectbox(
+            "Baris per halaman",
+            options=[50, 100, 250, 500],
+            index=1,
+            key="hop_rows_per_page_v16_27",
+        )
+
+    hop_search_result = hop_detail
+
+    if hop_search:
+        hop_query = hop_search.casefold()
+        hop_search_columns = [
+            column
+            for column in [
+                "Tanggal",
+                "Tahun",
+                "Bulan",
+                "HOP_Unit_Key",
+                "Nilai_HOP",
+                "HOP_Dinormalisasi_Ke_Nol",
+            ]
+            if column in hop_detail.columns
+        ]
+
+        hop_match = pd.Series(
+            False,
+            index=hop_detail.index,
+            dtype=bool,
+        )
+
+        for column in hop_search_columns:
+            if column == "Tanggal":
+                searchable = pd.to_datetime(
+                    hop_detail[column],
+                    errors="coerce",
+                ).dt.strftime("%d-%b-%Y").fillna("")
+            else:
+                searchable = (
+                    hop_detail[column]
+                    .fillna("")
+                    .astype(str)
+                )
+
+            hop_match |= searchable.str.casefold().str.contains(
+                hop_query,
+                regex=False,
+                na=False,
+            )
+
+        hop_search_result = hop_detail.loc[hop_match].copy()
+
+    hop_total_rows = len(hop_search_result)
+    hop_total_pages = max(
+        1,
+        math.ceil(hop_total_rows / hop_rows_per_page),
+    )
+
+    # Jika search atau page-size berubah, pastikan halaman tetap valid.
+    current_hop_page = int(
+        st.session_state.get("hop_page_v16_27", 1)
+    )
+    current_hop_page = min(max(current_hop_page, 1), hop_total_pages)
+    st.session_state["hop_page_v16_27"] = current_hop_page
+
+    nav_prev, nav_page, nav_next, nav_info = st.columns(
+        [0.75, 1.0, 0.75, 2.5],
+        gap="small",
+    )
+
+    with nav_prev:
+        if st.button(
+            "← Sebelumnya",
+            use_container_width=True,
+            disabled=current_hop_page <= 1,
+            key="hop_prev_v16_27",
+        ):
+            st.session_state["hop_page_v16_27"] = current_hop_page - 1
+            st.rerun()
+
+    with nav_page:
+        selected_hop_page = st.number_input(
+            "Halaman",
+            min_value=1,
+            max_value=hop_total_pages,
+            value=current_hop_page,
+            step=1,
+            key="hop_page_input_v16_27",
+            label_visibility="collapsed",
+        )
+        if int(selected_hop_page) != current_hop_page:
+            st.session_state["hop_page_v16_27"] = int(selected_hop_page)
+            st.rerun()
+
+    with nav_next:
+        if st.button(
+            "Selanjutnya →",
+            use_container_width=True,
+            disabled=current_hop_page >= hop_total_pages,
+            key="hop_next_v16_27",
+        ):
+            st.session_state["hop_page_v16_27"] = current_hop_page + 1
+            st.rerun()
+
+    hop_start = (current_hop_page - 1) * hop_rows_per_page
+    hop_end = min(hop_start + hop_rows_per_page, hop_total_rows)
+
+    with nav_info:
+        if hop_total_rows:
+            st.caption(
+                f"Menampilkan **{hop_start + 1:,}–{hop_end:,}** dari "
+                f"**{hop_total_rows:,}** observasi | "
+                f"Halaman **{current_hop_page:,}/{hop_total_pages:,}**"
+            )
+        else:
+            st.caption("Tidak ada observasi yang cocok dengan pencarian.")
+
+    hop_page_data = hop_search_result.iloc[hop_start:hop_end].copy()
+
+    # Penting: jangan gunakan pandas Styler pada tabel detail besar.
+    # Zebra rows tetap ditangani oleh CSS grid global aplikasi.
     st.dataframe(
-        style_banded_table(filtered_hop),
+        hop_page_data,
         use_container_width=True,
         hide_index=True,
         height=480,
         column_config={
-            "Tanggal": (
-                st.column_config.DateColumn(
-                    "Tanggal",
-                    format="DD-MMM-YYYY",
-                )
+            "Tanggal": st.column_config.DateColumn(
+                "Tanggal",
+                format="DD-MMM-YYYY",
             ),
-            "Nilai_HOP": (
-                st.column_config.NumberColumn(
-                    "Nilai HOP",
-                    format="%.2f",
-                )
+            "Tahun": st.column_config.NumberColumn(
+                "Tahun",
+                format="%d",
+            ),
+            "Bulan": st.column_config.NumberColumn(
+                "Bulan",
+                format="%d",
+            ),
+            "HOP_Unit_Key": st.column_config.TextColumn(
+                "HOP Unit Key",
+                width="large",
+            ),
+            "Nilai_HOP": st.column_config.NumberColumn(
+                "Nilai HOP",
+                format="%.2f",
+            ),
+            "HOP_Dinormalisasi_Ke_Nol": st.column_config.CheckboxColumn(
+                "Dinormalisasi ke Nol",
+                disabled=True,
             ),
         },
     )
+
+    hop_download_col, hop_download_info = st.columns(
+        [1.1, 2.9],
+        gap="small",
+    )
+
+    with hop_download_col:
+        csv_hop = dataframe_to_csv_bytes(hop_search_result)
+        st.download_button(
+            "Unduh HOP Harian (CSV)",
+            data=csv_hop,
+            file_name="hop_harian_terfilter.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="download_hop_csv_v16_27",
+        )
+
+    with hop_download_info:
+        st.caption(
+            "Unduhan berisi seluruh observasi HOP sesuai filter dashboard "
+            "dan quick search, bukan hanya halaman yang sedang ditampilkan."
+        )
 
 
 # ============================================================
