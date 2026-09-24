@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.12-primary-energy-scope"
+APP_VERSION = "2026.09.24-v16.13-stress-test"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -256,6 +256,95 @@ def edir_risk_level(score: int) -> str:
     if score <= 19:
         return "Moderate to High"
     return "High"
+
+
+def simulate_compound_poisson_pert(
+    expected_frequency: float,
+    severity_values: pd.Series,
+    iterations: int,
+    random_seed: int,
+    frequency_multiplier: float = 1.0,
+    severity_multiplier: float = 1.0,
+) -> dict:
+    """Menjalankan simulasi Compound Poisson–BETA-PERT.
+
+    Fungsi ini dipakai oleh stress test agar baseline dan skenario memakai
+    engine, sampel severity, serta definisi persentil yang konsisten.
+    """
+
+    severity = pd.to_numeric(
+        severity_values, errors="coerce"
+    ).dropna()
+    severity = severity.loc[severity > 0].astype(float)
+
+    if len(severity) < 3:
+        raise ValueError(
+            "Minimal diperlukan tiga observasi severity positif."
+        )
+
+    pert_minimum = float(severity.quantile(0.10))
+    pert_likely = float(severity.quantile(0.50))
+    pert_maximum = float(severity.quantile(0.90))
+
+    if pert_maximum <= pert_minimum:
+        pert_maximum = float(severity.max())
+    if pert_maximum <= pert_minimum:
+        raise ValueError("Rentang severity belum memiliki variasi.")
+
+    pert_likely = float(
+        np.clip(pert_likely, pert_minimum, pert_maximum)
+    )
+    pert_lambda = 4.0
+    pert_alpha = 1 + pert_lambda * (
+        (pert_likely - pert_minimum)
+        / (pert_maximum - pert_minimum)
+    )
+    pert_beta = 1 + pert_lambda * (
+        (pert_maximum - pert_likely)
+        / (pert_maximum - pert_minimum)
+    )
+
+    stressed_frequency = max(
+        float(expected_frequency) * float(frequency_multiplier),
+        0.0,
+    )
+    severity_scale = max(float(severity_multiplier), 0.0)
+    rng = np.random.default_rng(int(random_seed))
+    event_counts = rng.poisson(
+        stressed_frequency, size=int(iterations)
+    )
+    total_losses = np.zeros(int(iterations), dtype=float)
+    total_events = int(event_counts.sum())
+
+    if total_events > 0:
+        beta_samples = rng.beta(
+            pert_alpha, pert_beta, size=total_events
+        )
+        simulated_severity = (
+            pert_minimum
+            + beta_samples * (pert_maximum - pert_minimum)
+        ) * severity_scale
+        simulation_index = np.repeat(
+            np.arange(int(iterations)), event_counts
+        )
+        total_losses = np.bincount(
+            simulation_index,
+            weights=simulated_severity,
+            minlength=int(iterations),
+        )
+
+    return {
+        "expected_frequency": stressed_frequency,
+        "event_counts": event_counts,
+        "losses": total_losses,
+        "mean": float(np.mean(total_losses)),
+        "p50": float(np.percentile(total_losses, 50)),
+        "p90": float(np.percentile(total_losses, 90)),
+        "p95": float(np.percentile(total_losses, 95)),
+        "pert_minimum": pert_minimum * severity_scale,
+        "pert_likely": pert_likely * severity_scale,
+        "pert_maximum": pert_maximum * severity_scale,
+    }
 
 
 def build_prime_risk_pdf(report_data: dict) -> bytes:
@@ -501,9 +590,25 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
             "Hasil Monte Carlo akan disajikan setelah simulasi dijalankan.",
             body_style,
         ))
+    story.append(Spacer(1, 6 * mm))
+
+    story.append(Paragraph("5. Stress Test", heading_style))
+    stress_rows = report_data.get("stress_rows", [])
+    if stress_rows:
+        story.append(
+            styled_table(
+                [["Parameter", "Baseline", "Stress"]] + stress_rows,
+                [80 * mm, 60 * mm, 60 * mm],
+            )
+        )
+    else:
+        story.append(Paragraph(
+            "Hasil stress test akan disajikan setelah skenario dijalankan.",
+            body_style,
+        ))
     story.append(PageBreak())
 
-    story.append(Paragraph("5. Prediksi Risiko", heading_style))
+    story.append(Paragraph("6. Prediksi Risiko", heading_style))
     prediction_rows = report_data.get("prediction_rows", [])
     if prediction_rows:
         story.append(
@@ -591,7 +696,7 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
         ))
     story.append(PageBreak())
 
-    story.append(Paragraph("6. Profil Kategori Risiko", heading_style))
+    story.append(Paragraph("7. Profil Kategori Risiko", heading_style))
     category_rows = report_data.get("category_rows", [])
     if category_rows:
         story.append(
@@ -610,7 +715,7 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
             body_style,
         ))
     story.append(Spacer(1, 7 * mm))
-    story.append(Paragraph("7. Metodologi dan Batasan", heading_style))
+    story.append(Paragraph("8. Metodologi dan Batasan", heading_style))
     story.append(
         Paragraph(
             "Frekuensi Kejadian Loss dimodelkan menggunakan distribusi "
@@ -619,6 +724,8 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
             "dan P90. Faktor kemungkinan menggunakan peluang minimal satu "
             "kejadian, sedangkan faktor dampak menggunakan P90 dibandingkan "
             "Risk Limit. Nilai risiko mengikuti matriks ED 0012.E-2024. "
+            "Stress test menggunakan multiplier frekuensi dan severity "
+            "untuk membandingkan kondisi baseline dengan skenario tekanan. "
             "Kualitas prediksi bergantung pada kelengkapan, konsistensi, "
             "dan representativitas data historis.",
             body_style,
@@ -1505,6 +1612,7 @@ report_category_risk = pd.DataFrame()
     tab_kri,
     tab_hop_loss,
     tab_monte_carlo,
+    tab_stress_test,
     tab_prediction,
     tab_heatmap,
     tab_validation,
@@ -1519,6 +1627,7 @@ report_category_risk = pd.DataFrame()
         "KRI & Early Warning",
         "Analisis HOP–Loss",
         "Monte Carlo & BETA-PERT",
+        "Stress Test",
         "Prediksi Risiko",
         "Risk Heat Map",
         "Validasi Model",
@@ -3481,6 +3590,392 @@ with tab_monte_carlo:
                 "Hasil perlu divalidasi bersama pemilik risiko "
                 "sebelum digunakan sebagai batas keputusan."
             )
+
+
+# ============================================================
+# TAB STRESS TEST
+# ============================================================
+
+with tab_stress_test:
+    st.subheader("Stress Test Hambatan Energi Primer")
+    st.caption(
+        "Stress test membandingkan distribusi annual loss baseline dengan "
+        "skenario tekanan menggunakan engine Compound Poisson–BETA-PERT "
+        "yang sama. Multiplier adalah parameter skenario, bukan perubahan "
+        "pada data sumber."
+    )
+
+    stress_scenarios = {
+        "Waspada — tekanan pasokan awal": {
+            "frequency": 1.20,
+            "severity": 1.10,
+            "assumption": (
+                "Kondisi HOP berada pada zona siaga dan mulai terjadi "
+                "peningkatan hambatan pasokan."
+            ),
+        },
+        "Emergency — HOP kritis": {
+            "frequency": 1.50,
+            "severity": 1.25,
+            "assumption": (
+                "HOP berada di bawah 10 hari sehingga intensitas dan "
+                "dampak kejadian diasumsikan meningkat."
+            ),
+        },
+        "Gangguan pasokan berkepanjangan": {
+            "frequency": 2.00,
+            "severity": 1.50,
+            "assumption": (
+                "Gangguan pasokan berlangsung berkelanjutan selama periode "
+                "uji dan menekan kesinambungan operasi."
+            ),
+        },
+        "Extreme compound — pasokan & coal handling": {
+            "frequency": 2.50,
+            "severity": 2.00,
+            "assumption": (
+                "Tekanan pasokan terjadi bersamaan dengan keterbatasan "
+                "peralatan pendukung coal handling."
+            ),
+        },
+    }
+
+    scenario_name = st.selectbox(
+        "Skenario stress test",
+        options=list(stress_scenarios),
+        key="stress_scenario_v16_13",
+    )
+    scenario_defaults = stress_scenarios[scenario_name]
+
+    stress_input1, stress_input2, stress_input3 = st.columns(3)
+    with stress_input1:
+        frequency_multiplier = st.number_input(
+            "Frequency multiplier",
+            min_value=1.00,
+            max_value=5.00,
+            value=float(scenario_defaults["frequency"]),
+            step=0.05,
+            key=f"stress_frequency_{scenario_name}",
+            help=(
+                "Pengali terhadap ekspektasi frekuensi baseline. "
+                "Nilai 1.50 berarti frekuensi meningkat 50%."
+            ),
+        )
+    with stress_input2:
+        severity_multiplier = st.number_input(
+            "Severity multiplier",
+            min_value=1.00,
+            max_value=5.00,
+            value=float(scenario_defaults["severity"]),
+            step=0.05,
+            key=f"stress_severity_{scenario_name}",
+            help=(
+                "Pengali terhadap severity BETA-PERT baseline. "
+                "Nilai 1.25 berarti severity meningkat 25%."
+            ),
+        )
+    with stress_input3:
+        stress_iterations = st.number_input(
+            "Jumlah iterasi stress test",
+            min_value=1_000,
+            max_value=100_000,
+            value=10_000,
+            step=1_000,
+            key="stress_iterations_v16_13",
+        )
+
+    st.info("**Asumsi skenario:** " + scenario_defaults["assumption"])
+
+    stress_seed = st.number_input(
+        "Random seed stress test",
+        min_value=0,
+        max_value=999_999,
+        value=2026,
+        step=1,
+        key="stress_seed_v16_13",
+    )
+
+    run_stress_test = st.button(
+        "Jalankan Stress Test",
+        type="primary",
+        use_container_width=True,
+        key="run_stress_test_v16_13",
+    )
+
+    if run_stress_test:
+        try:
+            if hop_loss_daily.empty:
+                raise ValueError(
+                    "Observasi unit-hari belum tersedia pada filter aktif."
+                )
+
+            stress_severity_source = filtered.copy()
+            if "Start_DateTime" in stress_severity_source.columns:
+                stress_severity_source = stress_severity_source.dropna(
+                    subset=["Start_DateTime"]
+                )
+            stress_severity_values = pd.to_numeric(
+                stress_severity_source["Loss_Opportunity_Rp"],
+                errors="coerce",
+            ).dropna()
+            stress_severity_values = stress_severity_values.loc[
+                stress_severity_values > 0
+            ]
+
+            stress_observations = int(len(hop_loss_daily))
+            stress_events_with_hop = float(
+                hop_loss_daily["Jumlah_Kejadian_Loss"].sum()
+            )
+            stress_unit_count = int(
+                hop_loss_daily["HOP_Unit_Key"].nunique()
+            )
+            baseline_frequency = (
+                stress_events_with_hop / stress_observations
+                * stress_unit_count * 365
+                if stress_observations > 0
+                else 0.0
+            )
+
+            baseline_result = simulate_compound_poisson_pert(
+                baseline_frequency,
+                stress_severity_values,
+                int(stress_iterations),
+                int(stress_seed),
+            )
+            stress_result = simulate_compound_poisson_pert(
+                baseline_frequency,
+                stress_severity_values,
+                int(stress_iterations),
+                int(stress_seed) + 1,
+                float(frequency_multiplier),
+                float(severity_multiplier),
+            )
+
+            for result in [baseline_result, stress_result]:
+                result["exceedance"] = float(
+                    np.mean(result["losses"] > risk_limit_rp)
+                )
+                probability_event = float(
+                    1 - np.exp(-result["expected_frequency"])
+                )
+                result["likelihood_score"] = (
+                    likelihood_score_from_probability(
+                        probability_event
+                    )
+                )
+                result["impact_score"] = (
+                    impact_score_from_risk_limit_ratio(
+                        result["p90"] / risk_limit_rp
+                        if risk_limit_rp > 0 else 0.0
+                    )
+                )
+                result["risk_score"] = edir_risk_score(
+                    result["impact_score"],
+                    result["likelihood_score"],
+                )
+                result["risk_level"] = edir_risk_level(
+                    result["risk_score"]
+                )
+
+            st.session_state["stress_test_v16_13"] = {
+                "scenario": scenario_name,
+                "frequency_multiplier": float(frequency_multiplier),
+                "severity_multiplier": float(severity_multiplier),
+                "baseline": baseline_result,
+                "stress": stress_result,
+            }
+        except Exception as stress_error:
+            st.error("Stress test belum berhasil: " + str(stress_error))
+
+    stored_stress = st.session_state.get("stress_test_v16_13")
+    if stored_stress:
+        baseline_result = stored_stress["baseline"]
+        stress_result = stored_stress["stress"]
+
+        def stress_delta(stress_value, baseline_value):
+            if baseline_value == 0:
+                return "-"
+            return f"{(stress_value / baseline_value - 1):+.1%}"
+
+        stress_metrics = st.columns(5)
+        stress_metrics[0].metric(
+            "Ekspektasi Kejadian",
+            f"{stress_result['expected_frequency']:,.1f}",
+            stress_delta(
+                stress_result["expected_frequency"],
+                baseline_result["expected_frequency"],
+            ),
+        )
+        stress_metrics[1].metric(
+            "P50 Stress",
+            format_compact_rupiah(stress_result["p50"]),
+            stress_delta(stress_result["p50"], baseline_result["p50"]),
+        )
+        stress_metrics[2].metric(
+            "P90 Stress",
+            format_compact_rupiah(stress_result["p90"]),
+            stress_delta(stress_result["p90"], baseline_result["p90"]),
+        )
+        stress_metrics[3].metric(
+            "P95 Stress",
+            format_compact_rupiah(stress_result["p95"]),
+            stress_delta(stress_result["p95"], baseline_result["p95"]),
+        )
+        stress_metrics[4].metric(
+            "Peluang Loss > Risk Limit",
+            f"{stress_result['exceedance']:.2%}",
+            (
+                f"{stress_result['exceedance'] - baseline_result['exceedance']:+.2%}"
+            ),
+        )
+
+        comparison_table = pd.DataFrame(
+            {
+                "Indikator": [
+                    "Ekspektasi frekuensi tahunan",
+                    "Mean annual loss",
+                    "P50 annual loss",
+                    "P90 annual loss",
+                    "P95 annual loss",
+                    "Peluang loss > Risk Limit",
+                    "Nilai dan level risiko",
+                ],
+                "Baseline": [
+                    f"{baseline_result['expected_frequency']:,.1f}",
+                    format_compact_rupiah(baseline_result["mean"]),
+                    format_compact_rupiah(baseline_result["p50"]),
+                    format_compact_rupiah(baseline_result["p90"]),
+                    format_compact_rupiah(baseline_result["p95"]),
+                    f"{baseline_result['exceedance']:.2%}",
+                    (
+                        f"{baseline_result['risk_score']} — "
+                        f"{baseline_result['risk_level']}"
+                    ),
+                ],
+                "Stress": [
+                    f"{stress_result['expected_frequency']:,.1f}",
+                    format_compact_rupiah(stress_result["mean"]),
+                    format_compact_rupiah(stress_result["p50"]),
+                    format_compact_rupiah(stress_result["p90"]),
+                    format_compact_rupiah(stress_result["p95"]),
+                    f"{stress_result['exceedance']:.2%}",
+                    (
+                        f"{stress_result['risk_score']} — "
+                        f"{stress_result['risk_level']}"
+                    ),
+                ],
+            }
+        )
+        st.dataframe(
+            comparison_table,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        stress_histogram = go.Figure()
+        stress_histogram.add_trace(
+            go.Histogram(
+                x=baseline_result["losses"],
+                name="Baseline",
+                histnorm="probability density",
+                opacity=0.62,
+                marker_color="#2563EB",
+                nbinsx=45,
+            )
+        )
+        stress_histogram.add_trace(
+            go.Histogram(
+                x=stress_result["losses"],
+                name="Stress",
+                histnorm="probability density",
+                opacity=0.58,
+                marker_color="#DC2626",
+                nbinsx=45,
+            )
+        )
+        stress_histogram.add_vline(
+            x=risk_limit_rp,
+            line_dash="dash",
+            line_color="#111827",
+            annotation_text="Risk Limit",
+            annotation_position="top right",
+        )
+        stress_histogram.update_layout(
+            title=(
+                "Perbandingan Distribusi Annual Loss — Baseline vs Stress"
+            ),
+            xaxis_title="Annual Loss (Rp)",
+            yaxis_title="Kepadatan Probabilitas",
+            barmode="overlay",
+            height=480,
+            margin=dict(l=20, r=20, t=70, b=20),
+        )
+        st.plotly_chart(
+            stress_histogram,
+            use_container_width=True,
+            theme="streamlit",
+        )
+
+        percentile_chart_data = pd.DataFrame(
+            {
+                "Persentil": ["P50", "P90", "P95"] * 2,
+                "Annual_Loss_Rp": [
+                    baseline_result["p50"],
+                    baseline_result["p90"],
+                    baseline_result["p95"],
+                    stress_result["p50"],
+                    stress_result["p90"],
+                    stress_result["p95"],
+                ],
+                "Kondisi": ["Baseline"] * 3 + ["Stress"] * 3,
+            }
+        )
+        percentile_chart = px.bar(
+            percentile_chart_data,
+            x="Persentil",
+            y="Annual_Loss_Rp",
+            color="Kondisi",
+            barmode="group",
+            title="Perbandingan P50, P90, dan P95",
+            labels={"Annual_Loss_Rp": "Annual Loss (Rp)"},
+            color_discrete_map={
+                "Baseline": "#2563EB",
+                "Stress": "#DC2626",
+            },
+        )
+        percentile_chart.update_layout(
+            height=420,
+            margin=dict(l=20, r=20, t=70, b=20),
+        )
+        st.plotly_chart(
+            percentile_chart,
+            use_container_width=True,
+            theme="streamlit",
+        )
+
+        st.success(
+            "Hasil stress test menunjukkan sensitivitas profil risiko "
+            "terhadap peningkatan frekuensi dan severity. Gunakan hasil "
+            "ini sebagai scenario analysis dan dukungan keputusan, bukan "
+            "sebagai kepastian kejadian."
+        )
+
+        with st.expander("Dasar dan batasan stress test", expanded=False):
+            st.markdown(
+                f"""
+- Skenario aktif: **{stored_stress['scenario']}**.
+- Frequency multiplier: **{stored_stress['frequency_multiplier']:.2f}×**.
+- Severity multiplier: **{stored_stress['severity_multiplier']:.2f}×**.
+- Baseline menggunakan data sesuai filter dashboard dan scope energi primer.
+- Stress test tidak mengubah Google Sheet maupun parameter sumber.
+- Multiplier merupakan asumsi skenario yang perlu disepakati bersama pemilik risiko.
+"""
+            )
+    else:
+        st.info(
+            "Pilih skenario, periksa multiplier, lalu tekan "
+            "**Jalankan Stress Test**."
+        )
 
 
 # ============================================================
@@ -6296,6 +6791,79 @@ with tab_report:
                     ],
                 ]
 
+            stress_report_rows = []
+            report_stress_test = st.session_state.get(
+                "stress_test_v16_13"
+            )
+            if report_stress_test:
+                report_stress_baseline = report_stress_test["baseline"]
+                report_stress_result = report_stress_test["stress"]
+                stress_report_rows = [
+                    [
+                        "Skenario",
+                        "Baseline",
+                        report_stress_test["scenario"],
+                    ],
+                    [
+                        "Frequency multiplier",
+                        "1.00x",
+                        f"{report_stress_test['frequency_multiplier']:.2f}x",
+                    ],
+                    [
+                        "Severity multiplier",
+                        "1.00x",
+                        f"{report_stress_test['severity_multiplier']:.2f}x",
+                    ],
+                    [
+                        "Ekspektasi frekuensi tahunan",
+                        f"{report_stress_baseline['expected_frequency']:,.1f}",
+                        f"{report_stress_result['expected_frequency']:,.1f}",
+                    ],
+                    [
+                        "P50 annual loss",
+                        format_compact_rupiah(
+                            report_stress_baseline["p50"]
+                        ),
+                        format_compact_rupiah(
+                            report_stress_result["p50"]
+                        ),
+                    ],
+                    [
+                        "P90 annual loss",
+                        format_compact_rupiah(
+                            report_stress_baseline["p90"]
+                        ),
+                        format_compact_rupiah(
+                            report_stress_result["p90"]
+                        ),
+                    ],
+                    [
+                        "P95 annual loss",
+                        format_compact_rupiah(
+                            report_stress_baseline["p95"]
+                        ),
+                        format_compact_rupiah(
+                            report_stress_result["p95"]
+                        ),
+                    ],
+                    [
+                        "Peluang loss > Risk Limit",
+                        f"{report_stress_baseline['exceedance']:.2%}",
+                        f"{report_stress_result['exceedance']:.2%}",
+                    ],
+                    [
+                        "Nilai dan level risiko",
+                        (
+                            f"{report_stress_baseline['risk_score']} - "
+                            f"{report_stress_baseline['risk_level']}"
+                        ),
+                        (
+                            f"{report_stress_result['risk_score']} - "
+                            f"{report_stress_result['risk_level']}"
+                        ),
+                    ],
+                ]
+
             prediction_report_rows = []
             if report_prediction:
                 prediction_report_rows = [
@@ -6431,6 +6999,7 @@ with tab_report:
                 "kri_rows": kri_report_rows,
                 "hop_loss_rows": hop_report_rows,
                 "monte_rows": monte_report_rows,
+                "stress_rows": stress_report_rows,
                 "prediction_rows": prediction_report_rows,
                 "prediction_likelihood": (
                     report_prediction.get("likelihood_score")
@@ -6545,6 +7114,15 @@ Model dapat memisahkan frekuensi kejadian berdasarkan:
 - kategori risiko; dan
 - periode waktu.
 
+### Stress test
+
+Stress test membandingkan baseline dengan kondisi tekanan
+melalui pengali frekuensi dan severity. Frekuensi tetap
+disimulasikan menggunakan Poisson, severity menggunakan
+BETA-PERT, dan total loss dibentuk melalui Monte Carlo.
+Multiplier merupakan asumsi skenario yang dapat disesuaikan
+dan tidak mengubah data sumber maupun Risk Limit.
+
 ### Pengembangan model berikutnya
 
 Data ini dapat digunakan untuk:
@@ -6554,6 +7132,7 @@ Data ini dapat digunakan untuk:
 - simulasi Monte Carlo annual loss;
 - P50, P90, dan P95;
 - probability of exceedance;
+- stress test baseline versus skenario tekanan;
 - risk heat map; dan
 - rekomendasi mitigasi berbasis HOP.
 """
