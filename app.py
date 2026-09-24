@@ -31,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.18-danantara-png-fix"
+APP_VERSION = "2026.09.24-v16.19-compact-responsive"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -99,9 +99,9 @@ def render_prime_risk_header() -> None:
     display:grid;
     grid-template-columns:minmax(170px,240px) 1fr minmax(220px,310px);
     align-items:center;
-    gap:24px;
-    padding:14px 18px 18px;
-    margin:0 0 18px;
+    gap:16px;
+    padding:8px 16px 10px;
+    margin:0 0 8px;
     background:#ffffff;
     border:1px solid #dce5ef;
     border-top:5px solid #00a2e1;
@@ -112,31 +112,91 @@ def render_prime_risk_header() -> None:
 .prime-corporate-logo.left {{justify-content:flex-start;}}
 .prime-corporate-logo.right {{justify-content:flex-end;}}
 .prime-corporate-logo.left img {{
-    width:205px;max-width:100%;max-height:66px;object-fit:contain;
+    width:175px;max-width:100%;max-height:48px;object-fit:contain;
 }}
 .prime-corporate-logo.right img {{
-    width:275px;max-width:100%;max-height:72px;object-fit:contain;
+    width:235px;max-width:100%;max-height:52px;object-fit:contain;
 }}
 .prime-brand-title {{min-width:0;text-align:center;}}
 .prime-brand-title h1 {{
-    margin:0;color:#172f55;font-size:clamp(30px,3vw,44px);
+    margin:0;color:#172f55;font-size:clamp(25px,2.5vw,36px);
     line-height:1.05;font-weight:800;letter-spacing:1.5px;
 }}
 .prime-brand-title p {{
-    margin:7px 0 0;color:#5c708c;font-size:clamp(12px,1.15vw,16px);
+    margin:4px 0 0;color:#5c708c;font-size:clamp(11px,1vw,14px);
     line-height:1.35;font-weight:500;
 }}
 .prime-model-caption {{
-    margin:-4px 0 20px;padding:0 8px;color:#64748b;
-    text-align:center;font-size:14px;line-height:1.55;
+    margin:0 0 8px;padding:0 8px;color:#64748b;
+    text-align:center;font-size:12px;line-height:1.35;
+}}
+
+/* =========================================================
+   PRIME-RISK COMPACT RESPONSIVE — desktop, laptop, mobile
+   ========================================================= */
+.block-container {{
+    max-width:100%!important;
+    padding-top:.45rem!important;
+    padding-bottom:.8rem!important;
+    padding-left:1.15rem!important;
+    padding-right:1.15rem!important;
+}}
+div[data-testid="stVerticalBlock"] {{gap:.55rem!important;}}
+div[data-testid="stHorizontalBlock"] {{gap:.7rem!important;}}
+h1 {{font-size:clamp(1.55rem,2.1vw,2.15rem)!important;line-height:1.12!important;}}
+h2 {{font-size:clamp(1.25rem,1.65vw,1.65rem)!important;line-height:1.15!important;}}
+h3 {{font-size:clamp(1rem,1.3vw,1.25rem)!important;line-height:1.2!important;}}
+p {{margin-bottom:.28rem!important;}}
+div[data-testid="stMetric"] {{
+    background:#fff;border:1px solid #dfe6ef;border-radius:10px;
+    padding:.5rem .7rem!important;min-height:78px;
+    box-shadow:0 2px 7px rgba(15,35,65,.05);
+}}
+div[data-testid="stMetricLabel"] {{font-size:.8rem!important;}}
+div[data-testid="stMetricValue"] {{
+    font-size:clamp(1.2rem,1.65vw,1.7rem)!important;line-height:1.08!important;
+}}
+div[data-testid="stMetricDelta"] {{font-size:.72rem!important;}}
+div[data-testid="stTabs"] button {{
+    min-height:2.25rem!important;padding:.35rem .62rem!important;
+    font-size:.8rem!important;white-space:nowrap;
+}}
+div[data-testid="stTabs"] div[role="tablist"] {{
+    gap:.08rem!important;overflow-x:auto;scrollbar-width:thin;
+}}
+div[data-testid="stExpander"] details summary {{padding:.48rem .7rem!important;}}
+div[data-testid="stSelectbox"],
+div[data-testid="stNumberInput"],
+div[data-testid="stDateInput"],
+div[data-testid="stSlider"] {{margin-bottom:.08rem!important;}}
+div[data-testid="stPlotlyChart"] {{margin-top:-.15rem!important;margin-bottom:-.15rem!important;}}
+div[data-testid="stDataFrame"] {{font-size:.78rem!important;}}
+div.stButton > button {{min-height:2.3rem!important;padding:.28rem .72rem!important;}}
+hr {{margin:.55rem 0!important;}}
+#MainMenu, footer {{visibility:hidden;}}
+
+@media (max-width:1366px) {{
+    .block-container {{
+        padding-top:.3rem!important;padding-bottom:.6rem!important;
+        padding-left:.8rem!important;padding-right:.8rem!important;
+    }}
+    div[data-testid="stVerticalBlock"] {{gap:.38rem!important;}}
+    div[data-testid="stMetric"] {{padding:.42rem .55rem!important;min-height:70px;}}
+    div[data-testid="stMetricValue"] {{font-size:1.28rem!important;}}
+    .prime-corporate-header {{padding:6px 12px 8px;margin-bottom:5px;}}
+    .prime-corporate-logo.left img {{width:150px;max-height:42px;}}
+    .prime-corporate-logo.right img {{width:205px;max-height:46px;}}
+    .prime-model-caption {{font-size:11px;margin-bottom:5px;}}
 }}
 @media (max-width:900px) {{
     .prime-corporate-header {{grid-template-columns:1fr 1fr;gap:14px;}}
     .prime-brand-title {{grid-column:1/-1;grid-row:1;}}
     .prime-corporate-logo.left {{grid-column:1;grid-row:2;justify-content:center;}}
     .prime-corporate-logo.right {{grid-column:2;grid-row:2;justify-content:center;}}
-    .prime-corporate-logo.left img {{width:155px;max-height:54px;}}
-    .prime-corporate-logo.right img {{width:205px;max-height:58px;}}
+    .prime-corporate-logo.left img {{width:135px;max-height:42px;}}
+    .prime-corporate-logo.right img {{width:175px;max-height:45px;}}
+    .block-container {{padding:.35rem .55rem .65rem!important;}}
+    div[data-testid="stMetricValue"] {{font-size:1.2rem!important;}}
 }}
 @media print {{
     .prime-corporate-header {{
