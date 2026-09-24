@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.14-focused-category-scope"
+APP_VERSION = "2026.09.24-v16.15-sumkal-category-alias"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -74,6 +74,22 @@ PRIMARY_ENERGY_SUBCATEGORIES = {
     "keterbatasan volume batubara",
     "plugging",
     "plugging/kualitas batubara",
+}
+
+# Harmonisasi istilah antarsumber. Nilai sumber tidak diubah; alias hanya
+# diterapkan pada salinan data di memori aplikasi. Dengan demikian kategori
+# SUMKAL "Ggn Kualitas Batubara" tetap berada dalam salah satu dari lima
+# kategori model yang disepakati.
+PRIMARY_ENERGY_SUBCATEGORY_ALIASES = {
+    "ggn kualitas batubara": "plugging/kualitas batubara",
+}
+
+PRIMARY_ENERGY_SUBCATEGORY_LABELS = {
+    "coal supply": "Coal Supply",
+    "keterbatasan batubara mrc": "Keterbatasan Batubara MRC",
+    "keterbatasan volume batubara": "Keterbatasan Volume Batubara",
+    "plugging": "Plugging",
+    "plugging/kualitas batubara": "Plugging/Kualitas Batubara",
 }
 
 
@@ -964,8 +980,25 @@ def apply_primary_energy_scope(
         .str.casefold()
     )
 
-    explicit_scope = subcategory.isin(
+    normalized_subcategory = subcategory.replace(
+        PRIMARY_ENERGY_SUBCATEGORY_ALIASES
+    )
+    explicit_scope = normalized_subcategory.isin(
         PRIMARY_ENERGY_SUBCATEGORIES
+    )
+
+    # Gunakan label kanonis hanya pada salinan data aplikasi agar ringkasan,
+    # grafik, simulasi, backtesting, dan PDF konsisten tanpa mengubah source.
+    canonical_label = normalized_subcategory.map(
+        PRIMARY_ENERGY_SUBCATEGORY_LABELS
+    )
+    data["Subkategori_Event_Sumber"] = data.get(
+        "Subkategori_Event",
+        pd.Series("", index=data.index, dtype="object"),
+    )
+    data["Subkategori_Event"] = canonical_label.where(
+        explicit_scope,
+        data["Subkategori_Event_Sumber"],
     )
     in_scope = explicit_scope
     data["Scope_Model"] = np.where(
@@ -975,7 +1008,11 @@ def apply_primary_energy_scope(
     )
     data["Dasar_Scope"] = np.where(
         explicit_scope,
-        "Subkategori energi primer terpilih",
+        np.where(
+            subcategory.ne(normalized_subcategory),
+            "Alias subkategori yang diharmonisasi",
+            "Subkategori energi primer terpilih",
+        ),
         "Di luar lima subkategori terpilih",
     )
 
@@ -1517,7 +1554,7 @@ st.success(
 
 # Penampung hasil antar-tab untuk laporan PDF.
 report_monte_carlo = st.session_state.get(
-    "report_monte_carlo_v16_14_focused_scope",
+    "report_monte_carlo_v16_15_sumkal_alias",
     {},
 )
 report_prediction = {}
@@ -1653,6 +1690,31 @@ with tab_summary:
                 ascending=False,
             )
         )
+
+        # Pertahankan regional yang dipilih pada sumbu grafik walaupun nilainya
+        # nol. Ini membuat JAMALI, SUMKAL, dan SULMAPANA tidak menghilang hanya
+        # karena suatu kombinasi filter tidak memiliki nilai.
+        preferred_regional_order = [
+            region
+            for region in ["JAMALI", "SUMKAL", "SULMAPANA"]
+            if region in selected_regionals
+        ]
+        preferred_regional_order += [
+            region
+            for region in selected_regionals
+            if region not in preferred_regional_order
+        ]
+        if preferred_regional_order:
+            regional_summary = (
+                regional_summary
+                .set_index("Regional")
+                .reindex(
+                    preferred_regional_order,
+                    fill_value=0.0,
+                )
+                .rename_axis("Regional")
+                .reset_index()
+            )
 
         figure_regional = px.bar(
             regional_summary,
@@ -3163,7 +3225,7 @@ with tab_monte_carlo:
             # Pertahankan hasil simulasi lintas-rerun agar bagian Monte Carlo
             # tetap masuk ke PDF saat tombol pembuatan laporan ditekan.
             st.session_state[
-                "report_monte_carlo_v16_14_focused_scope"
+                "report_monte_carlo_v16_15_sumkal_alias"
             ] = report_monte_carlo
 
             (
@@ -3564,7 +3626,7 @@ with tab_stress_test:
     scenario_name = st.selectbox(
         "Skenario stress test",
         options=list(stress_scenarios),
-        key="stress_scenario_v16_14",
+        key="stress_scenario_v16_15",
     )
     scenario_defaults = stress_scenarios[scenario_name]
 
@@ -3602,7 +3664,7 @@ with tab_stress_test:
             max_value=100_000,
             value=10_000,
             step=1_000,
-            key="stress_iterations_v16_14",
+            key="stress_iterations_v16_15",
         )
 
     st.info("**Asumsi skenario:** " + scenario_defaults["assumption"])
@@ -3613,14 +3675,14 @@ with tab_stress_test:
         max_value=999_999,
         value=2026,
         step=1,
-        key="stress_seed_v16_14",
+        key="stress_seed_v16_15",
     )
 
     run_stress_test = st.button(
         "Jalankan Stress Test",
         type="primary",
         use_container_width=True,
-        key="run_stress_test_v16_14",
+        key="run_stress_test_v16_15",
     )
 
     if run_stress_test:
@@ -3698,7 +3760,7 @@ with tab_stress_test:
                     result["risk_score"]
                 )
 
-            st.session_state["stress_test_v16_14"] = {
+            st.session_state["stress_test_v16_15"] = {
                 "scenario": scenario_name,
                 "frequency_multiplier": float(frequency_multiplier),
                 "severity_multiplier": float(severity_multiplier),
@@ -3708,7 +3770,7 @@ with tab_stress_test:
         except Exception as stress_error:
             st.error("Stress test belum berhasil: " + str(stress_error))
 
-    stored_stress = st.session_state.get("stress_test_v16_14")
+    stored_stress = st.session_state.get("stress_test_v16_15")
     if stored_stress:
         baseline_result = stored_stress["baseline"]
         stress_result = stored_stress["stress"]
@@ -5454,7 +5516,7 @@ with tab_validation:
     )
 
     stored_backtest = st.session_state.get(
-        "rolling_backtest_summary_v16_14_focused_scope"
+        "rolling_backtest_summary_v16_15_sumkal_alias"
     )
     if stored_backtest:
         backtest_validation_result = (
@@ -5842,7 +5904,7 @@ with tab_validation:
                         "severity agar rentang prediksi semakin representatif."
                     )
 
-                st.session_state["rolling_backtest_summary_v16_14_focused_scope"] = {
+                st.session_state["rolling_backtest_summary_v16_15_sumkal_alias"] = {
                     "periods": int(len(backtest_result)),
                     "p90_coverage": p90_coverage,
                     "mean_error": (
@@ -6714,7 +6776,7 @@ with tab_report:
 
             stress_report_rows = []
             report_stress_test = st.session_state.get(
-                "stress_test_v16_14"
+                "stress_test_v16_15"
             )
             if report_stress_test:
                 report_stress_baseline = report_stress_test["baseline"]
