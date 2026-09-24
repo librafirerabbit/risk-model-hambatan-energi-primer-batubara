@@ -31,12 +31,64 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.22-tab-hover-contrast"
+APP_VERSION = "2026.09.24-v16.23-banded-tables"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
     "responsive": True,
 }
+
+
+def style_banded_table(dataframe: pd.DataFrame):
+    """Memberi header tegas dan warna selang-seling tanpa mengubah data."""
+
+    if not isinstance(dataframe, pd.DataFrame):
+        return dataframe
+
+    # Hindari payload style berlebihan pada tabel HOP yang sangat besar.
+    # Untuk tabel besar, zebra rows ditangani oleh CSS grid global.
+    if dataframe.size > 150_000:
+        return dataframe
+
+    def alternating_rows(data: pd.DataFrame):
+        styles = pd.DataFrame(
+            "",
+            index=data.index,
+            columns=data.columns,
+        )
+        styles.iloc[1::2, :] = (
+            "background-color:#eef5fb;"
+            "color:#172f55;"
+        )
+        styles.iloc[0::2, :] = (
+            "background-color:#ffffff;"
+            "color:#172f55;"
+        )
+        return styles
+
+    return (
+        dataframe.style
+        .apply(alternating_rows, axis=None)
+        .set_table_styles(
+            [
+                {
+                    "selector": "th",
+                    "props": [
+                        ("background-color", "#172f55"),
+                        ("color", "#ffffff"),
+                        ("font-weight", "700"),
+                        ("border-color", "#cbd5e1"),
+                    ],
+                },
+                {
+                    "selector": "td",
+                    "props": [
+                        ("border-color", "#dbe4ee"),
+                    ],
+                },
+            ]
+        )
+    )
 
 
 # ============================================================
@@ -205,7 +257,45 @@ div[data-testid="stNumberInput"],
 div[data-testid="stDateInput"],
 div[data-testid="stSlider"] {{margin-bottom:.08rem!important;}}
 div[data-testid="stPlotlyChart"] {{margin-top:-.15rem!important;margin-bottom:-.15rem!important;}}
-div[data-testid="stDataFrame"] {{font-size:.78rem!important;}}
+div[data-testid="stDataFrame"] {{
+    font-size:.78rem!important;
+    border:1px solid #cbd5e1!important;
+    border-radius:8px!important;
+    overflow:hidden!important;
+}}
+div[data-testid="stDataFrame"] [role="columnheader"] {{
+    background:#172f55!important;
+    color:#ffffff!important;
+    font-weight:700!important;
+    border-color:#94a3b8!important;
+}}
+div[data-testid="stDataFrame"] [role="columnheader"] * {{
+    color:#ffffff!important;
+}}
+div[data-testid="stDataFrame"] [role="gridcell"] {{
+    border-color:#dbe4ee!important;
+}}
+div[data-testid="stDataFrame"] [role="row"]:nth-child(even)
+[role="gridcell"] {{
+    background:#eef5fb!important;
+    color:#172f55!important;
+}}
+div[data-testid="stDataFrame"] [role="row"]:nth-child(odd)
+[role="gridcell"] {{
+    background:#ffffff!important;
+    color:#172f55!important;
+}}
+div[data-testid="stTable"] thead tr th {{
+    background:#172f55!important;
+    color:#ffffff!important;
+    font-weight:700!important;
+}}
+div[data-testid="stTable"] tbody tr:nth-child(even) {{
+    background:#eef5fb!important;
+}}
+div[data-testid="stTable"] tbody tr:nth-child(odd) {{
+    background:#ffffff!important;
+}}
 div.stButton > button {{min-height:2.3rem!important;padding:.28rem .72rem!important;}}
 hr {{margin:.55rem 0!important;}}
 #MainMenu, footer {{visibility:hidden;}}
@@ -2420,7 +2510,7 @@ with tab_kri:
         ).drop(columns="Prioritas")
 
         st.dataframe(
-            kri_unit,
+            style_banded_table(kri_unit),
             use_container_width=True,
             hide_index=True,
             height=520,
@@ -3058,7 +3148,7 @@ with tab_hop_loss:
     )
 
     st.dataframe(
-        hop_loss_summary,
+        style_banded_table(hop_loss_summary),
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -3764,7 +3854,7 @@ with tab_monte_carlo:
             )
 
             st.dataframe(
-                parameter_table,
+                style_banded_table(parameter_table),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -4075,7 +4165,7 @@ with tab_stress_test:
             }
         )
         st.dataframe(
-            comparison_table,
+            style_banded_table(comparison_table),
             use_container_width=True,
             hide_index=True,
         )
@@ -5277,7 +5367,7 @@ with tab_heatmap:
         ].copy()
 
         st.dataframe(
-            heatmap_display,
+            style_banded_table(heatmap_display),
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -5884,7 +5974,7 @@ with tab_validation:
     )
 
     st.dataframe(
-        validation_table,
+        style_banded_table(validation_table),
         use_container_width=True,
         hide_index=True,
         height=480,
@@ -6229,7 +6319,7 @@ with tab_validation:
                     "Periode_Uji"
                 ].dt.strftime("%b %Y")
                 st.dataframe(
-                    backtest_display[
+                    style_banded_table(backtest_display[
                         [
                             "Periode Uji",
                             "Frekuensi_Aktual",
@@ -6245,7 +6335,7 @@ with tab_validation:
                             "KRI_Prediksi",
                             "KRI_Aktual",
                         ]
-                    ],
+                    ]),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -6357,7 +6447,7 @@ with tab_loss:
         )
 
     st.dataframe(
-        loss_display,
+        style_banded_table(loss_display),
         use_container_width=True,
         hide_index=True,
         height=620,
@@ -6700,7 +6790,7 @@ with tab_hop:
         )
 
         st.dataframe(
-            hop_by_unit,
+            style_banded_table(hop_by_unit),
             use_container_width=True,
             hide_index=True,
             height=430,
@@ -6731,7 +6821,7 @@ with tab_hop:
     )
 
     st.dataframe(
-        filtered_hop,
+        style_banded_table(filtered_hop),
         use_container_width=True,
         hide_index=True,
         height=480,
