@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.10-competition-positive-narrative"
+APP_VERSION = "2026.09.24-v16.12-primary-energy-scope"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -63,6 +63,65 @@ SHEET_PARAMETER = "Parameter_Model"
 SHEET_MAPPING = "Mapping_Unit"
 
 LOSS_ID_COLUMN = "Kejadian_Loss_ID"
+
+
+# Scope kompetisi: kejadian yang berkaitan langsung dengan energi primer
+# batubara serta peralatan pendukung pada rantai coal handling, milling,
+# feeding, combustion, dan boiler island. Daftar ini sengaja eksplisit agar
+# hasil dapat diaudit dan tidak berubah hanya karena variasi narasi bebas.
+PRIMARY_ENERGY_SUBCATEGORIES = {
+    "air heater",
+    "boiler control systems",
+    "boiler furnace temp",
+    "boiler insp",
+    "bottom ash systems",
+    "coal flow maks",
+    "coal handling",
+    "coal quality",
+    "coal supply",
+    "combustion tuning",
+    "ggn aph",
+    "ggn bed temp",
+    "ggn boiler",
+    "ggn boiler auxiliaries",
+    "ggn chain grate",
+    "ggn chf",
+    "ggn coal feeder",
+    "ggn economizer",
+    "ggn hp fan",
+    "ggn induced draught fan",
+    "ggn instrumentasi boiler",
+    "ggn kualitas batubara",
+    "ggn mft boiler",
+    "ggn mill-feeder",
+    "ggn primary air fan",
+    "ggn proteksi boiler",
+    "ggn safety valve",
+    "ggn sistem pembakaran",
+    "ggn tube boiler leak",
+    "keterbatasan batubara mrc",
+    "keterbatasan volume batubara",
+    "mill-feeder",
+    "plugging",
+    "plugging/kualitas batubara",
+    "reheater",
+    "rsh",
+    "slag and ash removal",
+    "superheater",
+    "system piping boiler & valve",
+    "tube leak boiler",
+    "walltube",
+    "wet coal",
+}
+
+# Fallback hanya digunakan bila subkategori kosong/generik. Pola mencakup
+# istilah pasokan, mutu, penanganan batubara, serta sistem pembakaran/boiler.
+PRIMARY_ENERGY_FALLBACK_PATTERN = (
+    r"batubara|batu\s*bara|coal|mrc|hop\b|stok|stock|pasokan|tongkang|"
+    r"bunker|feeder|mill|plugging|wet\s*coal|slagging|furnace|"
+    r"combust|pembakaran|chain\s*grate|boiler|bed\s*temp|"
+    r"air\s*heater|\baph\b|primary\s*air|induced\s*draught|\bchf\b"
+)
 
 
 MONTH_LABELS = {
@@ -369,6 +428,8 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
         ["Disusun oleh", report_data["prepared_by"]],
         ["Filter tahun", report_data["filter_years"]],
         ["Filter unit", report_data["filter_units"]],
+        ["Scope model", report_data["model_scope"]],
+        ["Record dalam scope", report_data["scope_records"]],
         ["Risk Limit aktif", report_data["risk_limit"]],
         ["Sumber data", "Google Sheet publik PRIME-RISK"],
     ]
@@ -822,6 +883,77 @@ def prepare_loss_event_detail_v2(
     return data
 
 
+def apply_primary_energy_scope(
+    data: pd.DataFrame,
+) -> pd.DataFrame:
+    """Menandai kejadian energi primer dan peralatan pendukungnya.
+
+    Sumber tidak diubah. Klasifikasi dilakukan saat aplikasi membaca data,
+    sehingga seluruh kalkulasi memakai satu definisi scope yang konsisten.
+    """
+
+    data = data.copy()
+    subcategory = (
+        data.get(
+            "Subkategori_Event",
+            pd.Series("", index=data.index, dtype="object"),
+        )
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.casefold()
+    )
+
+    explicit_scope = subcategory.isin(
+        PRIMARY_ENERGY_SUBCATEGORIES
+    )
+    generic_subcategory = subcategory.isin(
+        {"", "others", "other", "lain-lain", "lainnya"}
+    )
+
+    fallback_text = pd.Series(
+        "", index=data.index, dtype="object"
+    )
+    for column in [
+        "Permasalahan",
+        "Penyebab_Source",
+        "Status_Kinerja",
+    ]:
+        if column in data.columns:
+            fallback_text = (
+                fallback_text
+                + " "
+                + data[column].fillna("").astype(str)
+            )
+
+    fallback_scope = (
+        generic_subcategory
+        & fallback_text.str.contains(
+            PRIMARY_ENERGY_FALLBACK_PATTERN,
+            case=False,
+            regex=True,
+            na=False,
+        )
+    )
+
+    in_scope = explicit_scope | fallback_scope
+    data["Scope_Model"] = np.where(
+        in_scope,
+        "ENERGI PRIMER & PERALATAN PENDUKUNG",
+        "DI LUAR SCOPE MODEL",
+    )
+    data["Dasar_Scope"] = np.select(
+        [explicit_scope, fallback_scope],
+        [
+            "Subkategori terverifikasi",
+            "Narasi energi primer pada kategori generik",
+        ],
+        default="Di luar definisi scope",
+    )
+
+    return data
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def load_all_data():
     """Membaca dan membersihkan data Kejadian Loss dan HOP."""
@@ -898,6 +1030,8 @@ def load_all_data():
                     loss["HOP_Unit_Key"].map(key_region),
                 )
 
+        loss = apply_primary_energy_scope(loss)
+
     hop = convert_numeric(
         hop,
         [
@@ -912,6 +1046,12 @@ def load_all_data():
             "Tanggal",
         ],
     )
+
+    # Nilai HOP negatif dinormalisasi menjadi nol hanya pada layer Python.
+    # Kolom penanda dipertahankan untuk audit; source Google Sheet tidak
+    # diubah dan nilai yang sudah non-negatif tetap sama.
+    hop["HOP_Dinormalisasi_Ke_Nol"] = hop["Nilai_HOP"].lt(0)
+    hop["Nilai_HOP"] = hop["Nilai_HOP"].clip(lower=0)
 
     # Loss_Event_Detail_v2 tidak wajib menyimpan Batas_HOP_P20.
     # Jika kolom tersebut tidak tersedia, turunkan parameter P20
@@ -1002,6 +1142,26 @@ except Exception as error:
     )
 
     st.stop()
+
+
+# Simpan populasi lengkap hanya untuk transparansi audit. Seluruh komponen
+# pemodelan setelah titik ini memakai scope A yang telah disepakati.
+all_loss_data = loss_data.copy()
+if "Scope_Model" not in loss_data.columns:
+    loss_data = apply_primary_energy_scope(loss_data)
+    all_loss_data = loss_data.copy()
+
+loss_data = loss_data.loc[
+    loss_data["Scope_Model"].eq(
+        "ENERGI PRIMER & PERALATAN PENDUKUNG"
+    )
+].copy()
+
+scope_total_records = int(len(all_loss_data))
+scope_model_records = int(len(loss_data))
+scope_excluded_records = int(
+    scope_total_records - scope_model_records
+)
 
 
 validate_required_columns(
@@ -1096,7 +1256,7 @@ category_options = sorted(
 )
 
 selected_categories = st.sidebar.multiselect(
-    "Kategori final",
+    "Kategori / subkategori event",
     options=category_options,
     default=category_options,
 )
@@ -1145,6 +1305,23 @@ st.sidebar.divider()
 st.sidebar.caption(
     "Sumber aktif: Google Sheet Publik"
 )
+
+st.sidebar.caption(
+    "Scope aktif: Energi primer batubara & peralatan pendukung"
+)
+
+with st.sidebar.expander("Audit cakupan model", expanded=False):
+    st.write(
+        f"Record dalam scope: **{scope_model_records:,}** dari "
+        f"**{scope_total_records:,}** record sumber."
+    )
+    st.write(
+        f"Record di luar scope analitik: **{scope_excluded_records:,}**."
+    )
+    st.caption(
+        "Record di luar scope tidak dihapus dari source; hanya tidak "
+        "diikutkan dalam perhitungan PRIME-RISK."
+    )
 
 
 # ============================================================
@@ -1220,10 +1397,17 @@ st.subheader(
 )
 
 st.caption(
-    "Model prediktif risiko hambatan energi primer "
-    "batubara berbasis HOP, Kejadian Loss, asosiasi "
+    "Model prediktif khusus kejadian hambatan energi primer "
+    "batubara dan peralatan pendukung, berbasis HOP, Kejadian Loss, asosiasi "
     "statistik, BETA-PERT, Monte Carlo, probability "
     "of exceedance, dan risk heat map."
+)
+
+st.info(
+    "Scope analitik aktif: kejadian energi primer batubara dan peralatan "
+    "pendukung pada rantai coal handling, milling, feeding, combustion, "
+    "dan boiler island. HOP negatif dinormalisasi menjadi 0 hanya dalam "
+    "perhitungan; data sumber tetap dipertahankan."
 )
 
 
@@ -1312,7 +1496,10 @@ st.success(
 )
 
 # Penampung hasil antar-tab untuk laporan PDF.
-report_monte_carlo = {}
+report_monte_carlo = st.session_state.get(
+    "report_monte_carlo_v16_12_scope_a",
+    {},
+)
 report_prediction = {}
 report_category_risk = pd.DataFrame()
 
@@ -2951,6 +3138,11 @@ with tab_monte_carlo:
                 "p90_ratio": p90_risk_limit_ratio,
                 "exceedance_probability": probability_above_limit,
             }
+            # Pertahankan hasil simulasi lintas-rerun agar bagian Monte Carlo
+            # tetap masuk ke PDF saat tombol pembuatan laporan ditekan.
+            st.session_state[
+                "report_monte_carlo_v16_12_scope_a"
+            ] = report_monte_carlo
 
             (
                 monte_kpi1,
@@ -3768,7 +3960,16 @@ with tab_prediction:
                         },
                         color_discrete_sequence=["#2563EB"],
                     )
-                    for line_value, line_label, line_color in [
+                    prediction_x_low = max(
+                        0.0,
+                        float(np.percentile(predicted_losses, 0.5)) * 0.90,
+                    )
+                    prediction_x_high = max(
+                        float(np.percentile(predicted_losses, 99.5)) * 1.10,
+                        prediction_p90 * 1.10,
+                        1.0,
+                    )
+                    prediction_reference_lines = [
                         (
                             prediction_p50,
                             "P50",
@@ -3779,12 +3980,22 @@ with tab_prediction:
                             "P90",
                             "#DC2626",
                         ),
-                        (
+                    ]
+                    risk_limit_visible = (
+                        prediction_x_low
+                        <= exceedance_limit_rp
+                        <= prediction_x_high
+                    )
+                    if risk_limit_visible:
+                        prediction_reference_lines.append((
                             exceedance_limit_rp,
                             "Risk Limit",
                             "#111827",
-                        ),
-                    ]:
+                        ))
+
+                    for line_value, line_label, line_color in (
+                        prediction_reference_lines
+                    ):
                         prediction_chart.add_vline(
                             x=line_value,
                             line_dash="dash",
@@ -3802,11 +4013,21 @@ with tab_prediction:
                         ),
                         showlegend=False,
                     )
+                    prediction_chart.update_xaxes(
+                        range=[prediction_x_low, prediction_x_high]
+                    )
                     st.plotly_chart(
                         prediction_chart,
                         use_container_width=True,
                         theme="streamlit",
                     )
+                    if not risk_limit_visible:
+                        st.caption(
+                            "Risk Limit berada di luar rentang utama "
+                            "distribusi prediksi dan tetap digunakan dalam "
+                            "perhitungan peluang exceedance: "
+                            f"{format_compact_rupiah(exceedance_limit_rp)}."
+                        )
 
                     prediction_matrix = np.array(
                         [
@@ -4010,8 +4231,8 @@ with tab_heatmap:
     st.info(
         "Risk Limit aktif: "
         f"**{format_compact_rupiah(risk_limit_rp)}**. "
-        "Ubah nilainya melalui tab Monte Carlo & BETA-PERT; "
-        "heat map akan dihitung ulang secara otomatis."
+        "Nilai mengikuti sheet Parameter_Model pada source file dan "
+        "digunakan secara konsisten pada heat map serta simulasi."
     )
 
     heatmap_source = filtered.copy()
@@ -4698,8 +4919,8 @@ with tab_validation:
 
     st.caption(
         "Pemeriksaan kualitas data, dukungan statistik, "
-        "kesiapan model frekuensi dan severity, serta "
-        "kesenjangan validasi yang masih harus ditutup."
+        "kesiapan model frekuensi dan severity, serta agenda "
+        "penguatan validasi secara bertahap."
     )
 
     validation_loss = filtered.copy()
@@ -4775,8 +4996,11 @@ with tab_validation:
         else 0
     )
 
-    negative_hop_records = int(
-        (filtered_hop["Nilai_HOP"] < 0).sum()
+    normalized_hop_records = int(
+        filtered_hop.get(
+            "HOP_Dinormalisasi_Ke_Nol",
+            pd.Series(False, index=filtered_hop.index),
+        ).fillna(False).astype(bool).sum()
     )
     duplicate_unit_days = int(
         filtered_hop.duplicated(
@@ -4813,16 +5037,16 @@ with tab_validation:
         format_number(severity_sample_count),
     )
     validation_metric4.metric(
-        "Observasi HOP untuk Konfirmasi",
-        format_number(negative_hop_records),
+        "HOP Dinormalisasi ke 0",
+        format_number(normalized_hop_records),
         help=(
-            "Observasi yang dipertahankan secara transparan untuk "
-            "konfirmasi definisi operasional dan sumber data."
+            "Jumlah observasi HOP sumber yang bernilai negatif dan "
+            "diperlakukan sebagai nol pada layer perhitungan."
         ),
     )
 
     stored_backtest = st.session_state.get(
-        "rolling_backtest_summary_v16_10"
+        "rolling_backtest_summary_v16_12_scope_a"
     )
     if stored_backtest:
         backtest_validation_result = (
@@ -4886,16 +5110,12 @@ with tab_validation:
             ),
         },
         {
-            "Area_Validasi": "Rentang HOP",
-            "Indikator": "Observasi HOP untuk konfirmasi definisi",
-            "Hasil": format_number(negative_hop_records),
-            "Status": (
-                "TERKONFIRMASI"
-                if negative_hop_records == 0
-                else "KONFIRMASI SUMBER"
-            ),
+            "Area_Validasi": "Normalisasi HOP",
+            "Indikator": "Observasi sumber negatif diperlakukan sebagai 0",
+            "Hasil": format_number(normalized_hop_records),
+            "Status": "TERKENDALI DALAM PIPELINE",
             "Tindak_Lanjut": (
-                "Konfirmasi definisi operasional dan sumber observasi HOP"
+                "Pertahankan penanda audit tanpa mengubah data sumber"
             ),
         },
         {
@@ -5028,7 +5248,7 @@ with tab_validation:
         validation_pending = [
             "uji distribusi pembanding",
             "konvergensi Monte Carlo",
-            "konfirmasi definisi operasional observasi HOP",
+            "pemantauan konsistensi normalisasi HOP",
         ]
         if not stored_backtest:
             validation_pending.insert(0, "rolling backtesting temporal")
@@ -5214,7 +5434,7 @@ with tab_validation:
                         "severity agar rentang prediksi semakin representatif."
                     )
 
-                st.session_state["rolling_backtest_summary_v16_10"] = {
+                st.session_state["rolling_backtest_summary_v16_12_scope_a"] = {
                     "periods": int(len(backtest_result)),
                     "p90_coverage": p90_coverage,
                     "mean_error": (
@@ -6188,6 +6408,13 @@ with tab_report:
                 "risk_limit": format_compact_rupiah(
                     risk_limit_rp
                 ),
+                "model_scope": (
+                    "Hambatan energi primer batubara dan peralatan pendukung"
+                ),
+                "scope_records": (
+                    f"{scope_model_records:,} dari {scope_total_records:,} "
+                    "record sumber"
+                ),
                 "summary_rows": [
                     ["Jumlah Kejadian Loss", f"{total_loss_events:,}"],
                     [
@@ -6296,6 +6523,20 @@ frekuensi secara berlebihan atau *double counting*.
    Kejadian Loss.
 5. Jika `Kejadian_Loss_ID` belum tersedia, aplikasi
    menggunakan `Event_ID` sebagai identitas sementara.
+
+### Cakupan analitik
+
+Model utama hanya menggunakan kejadian yang terkait
+langsung dengan energi primer batubara dan peralatan
+pendukung pada rantai coal handling, milling, feeding,
+combustion, dan boiler island. Kejadian turbin, generator,
+jaringan, kondensor, intake air, dan outage umum tetap
+berada pada source untuk audit, tetapi tidak masuk ke
+perhitungan PRIME-RISK.
+
+Nilai HOP sumber yang negatif diperlakukan sebagai **0**
+pada layer Python dan diberi penanda audit. File sumber
+tidak diubah oleh proses normalisasi ini.
 
 ### Hubungan HOP dan Kejadian Loss
 
