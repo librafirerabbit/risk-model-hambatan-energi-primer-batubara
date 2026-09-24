@@ -31,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.19-compact-responsive"
+APP_VERSION = "2026.09.24-v16.20-header-safe-area"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -136,7 +136,8 @@ def render_prime_risk_header() -> None:
    ========================================================= */
 .block-container {{
     max-width:100%!important;
-    padding-top:.45rem!important;
+    /* Safe area agar konten tidak tertutup toolbar Streamlit. */
+    padding-top:4.65rem!important;
     padding-bottom:.8rem!important;
     padding-left:1.15rem!important;
     padding-right:1.15rem!important;
@@ -177,7 +178,7 @@ hr {{margin:.55rem 0!important;}}
 
 @media (max-width:1366px) {{
     .block-container {{
-        padding-top:.3rem!important;padding-bottom:.6rem!important;
+        padding-top:4.55rem!important;padding-bottom:.6rem!important;
         padding-left:.8rem!important;padding-right:.8rem!important;
     }}
     div[data-testid="stVerticalBlock"] {{gap:.38rem!important;}}
@@ -195,7 +196,12 @@ hr {{margin:.55rem 0!important;}}
     .prime-corporate-logo.right {{grid-column:2;grid-row:2;justify-content:center;}}
     .prime-corporate-logo.left img {{width:135px;max-height:42px;}}
     .prime-corporate-logo.right img {{width:175px;max-height:45px;}}
-    .block-container {{padding:.35rem .55rem .65rem!important;}}
+    .block-container {{
+        padding-top:4.45rem!important;
+        padding-right:.55rem!important;
+        padding-bottom:.65rem!important;
+        padding-left:.55rem!important;
+    }}
     div[data-testid="stMetricValue"] {{font-size:1.2rem!important;}}
 }}
 @media print {{
