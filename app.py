@@ -31,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.24-toolbar-restored"
+APP_VERSION = "2026.09.24-v16.25-dark-mode-readable"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -210,6 +210,26 @@ div[data-testid="stMetricValue"] {{
     font-size:clamp(1.2rem,1.65vw,1.7rem)!important;line-height:1.08!important;
 }}
 div[data-testid="stMetricDelta"] {{font-size:.72rem!important;}}
+
+/* Metric cards sengaja memakai background putih pada light maupun dark mode.
+   Karena Streamlit mewariskan warna teks dari theme aktif, dark mode dapat
+   menghasilkan teks putih di atas kartu putih. Paksa seluruh teks metric ke
+   navy agar kontras tetap tinggi pada kedua mode. */
+div[data-testid="stMetric"] [data-testid="stMetricLabel"],
+div[data-testid="stMetric"] [data-testid="stMetricLabel"] *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] *,
+div[data-testid="stMetric"] [data-testid="stMetricDelta"],
+div[data-testid="stMetric"] [data-testid="stMetricDelta"] * {{
+    color:#172f55!important;
+}}
+
+/* Teks deskripsi berada langsung di atas background utama Streamlit,
+   sehingga gunakan warna theme bawaan agar otomatis terbaca pada light/dark. */
+.prime-model-caption {{
+    color:var(--text-color)!important;
+    opacity:.72;
+}}
 div[data-testid="stTabs"] div[role="tablist"] {{
     gap:.55rem!important;
     overflow-x:auto!important;
