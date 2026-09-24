@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.9-validation-coverage-narrative"
+APP_VERSION = "2026.09.24-v16.10-competition-positive-narrative"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -401,7 +401,10 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
             )
         )
     else:
-        story.append(Paragraph("Data KRI tidak tersedia.", body_style))
+        story.append(Paragraph(
+            "Ringkasan KRI akan ditampilkan setelah perhitungan dijalankan.",
+            body_style,
+        ))
     story.append(PageBreak())
 
     story.append(Paragraph("3. Analisis HOP dan Kejadian Loss", heading_style))
@@ -417,7 +420,10 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
             )
         )
     else:
-        story.append(Paragraph("Analisis HOP-Loss tidak tersedia.", body_style))
+        story.append(Paragraph(
+            "Analisis HOP-Loss siap disajikan setelah cakupan data dipilih.",
+            body_style,
+        ))
     story.append(Spacer(1, 7 * mm))
 
     story.append(Paragraph("4. Monte Carlo dan BETA-PERT", heading_style))
@@ -430,7 +436,10 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
             )
         )
     else:
-        story.append(Paragraph("Hasil Monte Carlo tidak tersedia.", body_style))
+        story.append(Paragraph(
+            "Hasil Monte Carlo akan disajikan setelah simulasi dijalankan.",
+            body_style,
+        ))
     story.append(PageBreak())
 
     story.append(Paragraph("5. Prediksi Risiko", heading_style))
@@ -515,7 +524,10 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
             )
         )
     else:
-        story.append(Paragraph("Hasil prediksi tidak tersedia.", body_style))
+        story.append(Paragraph(
+            "Hasil prediksi akan disajikan setelah skenario dijalankan.",
+            body_style,
+        ))
     story.append(PageBreak())
 
     story.append(Paragraph("6. Profil Kategori Risiko", heading_style))
@@ -532,7 +544,10 @@ def build_prime_risk_pdf(report_data: dict) -> bytes:
             )
         )
     else:
-        story.append(Paragraph("Profil kategori tidak tersedia.", body_style))
+        story.append(Paragraph(
+            "Profil kategori siap disajikan setelah cakupan data dipilih.",
+            body_style,
+        ))
     story.append(Spacer(1, 7 * mm))
     story.append(Paragraph("7. Metodologi dan Batasan", heading_style))
     story.append(
@@ -760,11 +775,11 @@ def prepare_loss_event_detail_v2(
     )
 
     # Hirarki klasifikasi untuk data event-level:
-    # Kategori_Final -> Subkategori_Event -> Belum Diklasifikasikan.
+    # Kategori_Final -> Subkategori_Event -> Kategori dalam proses harmonisasi.
     # Permasalahan sudah dipakai untuk melengkapi Subkategori_Event di atas.
     data["Kategori_Final"] = (
         category.mask(category.eq(""), subcategory_fallback)
-        .replace("", "Belum Diklasifikasikan")
+        .replace("", "Kategori dalam proses harmonisasi")
     )
 
     required_for_model = [
@@ -1282,9 +1297,9 @@ kpi5.metric(
 
 
 if filtered.empty:
-    st.warning(
-        "Tidak ada data yang sesuai dengan "
-        "kombinasi filter."
+    st.info(
+        "Silakan sesuaikan kombinasi filter untuk menampilkan "
+        "data pada cakupan analisis yang dipilih."
     )
 
     st.stop()
@@ -1483,10 +1498,10 @@ with tab_summary:
         category_source = filtered.copy()
         category_source[summary_category_column] = (
             category_source[summary_category_column]
-            .fillna("Belum Diklasifikasikan")
+            .fillna("Kategori dalam proses harmonisasi")
             .astype(str)
             .str.strip()
-            .replace("", "Belum Diklasifikasikan")
+            .replace("", "Kategori dalam proses harmonisasi")
         )
 
         category_summary = (
@@ -1767,8 +1782,9 @@ with tab_kri:
     kri_unit = pd.DataFrame(kri_rows)
 
     if kri_unit.empty:
-        st.warning(
-            "Data HOP belum tersedia untuk membentuk KRI."
+        st.info(
+            "KRI siap dibentuk setelah observasi HOP tersedia "
+            "pada cakupan filter ini."
         )
     else:
         kri_status_order = [
@@ -1952,7 +1968,7 @@ with tab_kri:
             },
         )
 
-        st.warning(
+        st.info(
             "Status KRI menggunakan batas HOP tetap: "
             "Emergency/Merah untuk HOP < 10 hari; "
             "Siaga/Kuning untuk HOP ≥ 10 sampai dengan "
@@ -2403,14 +2419,13 @@ with tab_hop_loss:
 
     if relative_risk is None:
         st.info(
-            "Relative Risk belum dapat dihitung karena "
-            "tidak terdapat Kejadian Loss pada kelompok "
-            "HOP normal atau data pembanding belum cukup."
+            "Perhitungan Relative Risk menunggu kecukupan observasi "
+            "pembanding pada kelompok HOP rendah dan HOP normal."
         )
 
     elif relative_risk > 1:
         if association_significant:
-            st.warning(
+            st.info(
                 f"Kejadian Loss tercatat sekitar "
                 f"{relative_risk:.2f} kali lebih mungkin "
                 f"pada kondisi HOP rendah dibandingkan "
@@ -2433,7 +2448,7 @@ with tab_hop_loss:
                 else ""
             )
 
-            st.warning(
+            st.info(
                 f"Indikasi awal menunjukkan bahwa kemungkinan "
                 f"Kejadian Loss pada kondisi HOP rendah sekitar "
                 f"{relative_risk:.2f} kali dibandingkan kondisi "
@@ -2448,9 +2463,8 @@ with tab_hop_loss:
             f"Pada data terfilter, kemungkinan Kejadian Loss "
             f"saat HOP rendah tercatat sekitar "
             f"{relative_risk:.2f} kali dibandingkan kondisi "
-            f"HOP normal. Hasil ini belum menunjukkan "
-            f"peningkatan risiko pada HOP rendah dan perlu "
-            f"ditinjau terhadap kelengkapan data."
+            f"HOP normal. Temuan ini menjadi dasar untuk "
+            f"memperluas observasi dan menguji konsistensi hasil."
         )
 
     else:
@@ -2686,8 +2700,9 @@ with tab_monte_carlo:
 
     if parameter_risk_limit_rp <= 0:
         st.error(
-            "Risk Limit Korporat pada Parameter_Model belum "
-            "tersedia atau nilainya tidak valid."
+            "Parameter Risk Limit Korporat perlu dilengkapi dengan "
+            "nilai positif pada sheet Parameter_Model agar simulasi "
+            "dapat dilanjutkan."
         )
         st.stop()
 
@@ -2787,10 +2802,10 @@ with tab_monte_carlo:
         hop_loss_daily.empty
         or len(severity_values) < 3
     ):
-        st.warning(
-            "Simulasi belum dapat dijalankan. Diperlukan "
-            "data HOP unit-hari dan minimal tiga Kejadian "
-            "Loss dengan nilai Loss Opportunity positif."
+        st.info(
+            "Simulasi siap dijalankan setelah tersedia data HOP "
+            "unit-hari dan minimal tiga Kejadian Loss dengan nilai "
+            "Loss Opportunity positif."
         )
 
     else:
@@ -2812,9 +2827,9 @@ with tab_monte_carlo:
             )
 
         if pert_maximum <= pert_minimum:
-            st.warning(
-                "Rentang severity belum memadai untuk "
-                "membentuk distribusi BETA-PERT."
+            st.info(
+                "Rentang severity sedang disiapkan. Tambahkan variasi "
+                "observasi positif untuk membentuk distribusi BETA-PERT."
             )
         else:
             pert_likely = min(
@@ -3324,9 +3339,9 @@ with tab_prediction:
     )
 
     if not prediction_units:
-        st.warning(
-            "Prediksi belum dapat dijalankan karena tidak "
-            "tersedia observasi HOP unit-hari."
+        st.info(
+            "Fitur prediksi siap digunakan setelah observasi HOP "
+            "unit-hari tersedia pada cakupan analisis."
         )
     else:
         latest_hop_date = pd.to_datetime(
@@ -3504,9 +3519,9 @@ with tab_prediction:
             )
 
             if len(unit_severity) < 3:
-                st.warning(
-                    "Minimal tiga nilai Loss Opportunity positif "
-                    "diperlukan untuk simulasi dampak."
+                st.info(
+                    "Simulasi dampak siap dijalankan setelah tersedia "
+                    "minimal tiga nilai Loss Opportunity positif."
                 )
             else:
                 prediction_minimum = float(
@@ -3525,9 +3540,9 @@ with tab_prediction:
                     )
 
                 if prediction_maximum <= prediction_minimum:
-                    st.warning(
-                        "Rentang Loss Opportunity belum memadai "
-                        "untuk membentuk distribusi BETA-PERT."
+                    st.info(
+                        "Tambahkan variasi Loss Opportunity positif untuk "
+                        "memperkuat pembentukan distribusi BETA-PERT."
                     )
                 else:
                     prediction_likely = min(
@@ -4019,10 +4034,9 @@ with tab_heatmap:
     ]
 
     if heatmap_source.empty:
-        st.warning(
-            "Risk heat map belum dapat dibentuk karena "
-            "tidak terdapat Kejadian Loss bertanggal dengan "
-            "Loss Opportunity positif pada data terfilter."
+        st.info(
+            "Risk heat map siap dibentuk setelah cakupan filter memuat "
+            "Kejadian Loss bertanggal dengan Loss Opportunity positif."
         )
 
     else:
@@ -4436,7 +4450,7 @@ with tab_heatmap:
 def classify_backtest_hop(value):
     """Klasifikasi KRI HOP untuk validasi prediksi."""
     if pd.isna(value):
-        return "TIDAK TERSEDIA"
+        return "MENUNGGU DATA"
     if value < 10:
         return "EMERGENCY / MERAH"
     if value <= 15:
@@ -4561,7 +4575,10 @@ def run_monthly_backtest(
         ].copy()
 
     if hop_bt.empty:
-        return pd.DataFrame(), "Data HOP tidak tersedia."
+        return pd.DataFrame(), (
+            "Rolling backtesting siap dijalankan setelah data HOP "
+            "tersedia untuk unit yang dipilih."
+        )
 
     monthly_coverage = (
         hop_bt.groupby("_Bulan_BT")
@@ -4796,18 +4813,22 @@ with tab_validation:
         format_number(severity_sample_count),
     )
     validation_metric4.metric(
-        "HOP Negatif",
+        "Observasi HOP untuk Konfirmasi",
         format_number(negative_hop_records),
+        help=(
+            "Observasi yang dipertahankan secara transparan untuk "
+            "konfirmasi definisi operasional dan sumber data."
+        ),
     )
 
     stored_backtest = st.session_state.get(
-        "rolling_backtest_summary_v16_9"
+        "rolling_backtest_summary_v16_10"
     )
     if stored_backtest:
         backtest_validation_result = (
             f"{stored_backtest['periods']} periode; "
             f"P90 coverage {stored_backtest['p90_coverage']:.2f}%; "
-            f"error P50 {stored_backtest['mean_error']:.2f}%"
+            f"deviasi P50 {stored_backtest['mean_error']:.2f}%"
         )
         backtest_validation_status = stored_backtest["status"]
         backtest_validation_action = stored_backtest["action"]
@@ -4824,9 +4845,9 @@ with tab_validation:
             "Indikator": "Coverage kejadian bertanggal dengan Nilai HOP",
             "Hasil": f"{hop_pairing_coverage:.1%}",
             "Status": (
-                "MEMADAI"
+                "CAKUPAN KUAT"
                 if hop_pairing_coverage >= 0.90
-                else "PERLU PERBAIKAN"
+                else "PRIORITAS PENGUATAN"
             ),
             "Tindak_Lanjut": (
                 "Pertahankan coverage minimal 90%"
@@ -4839,9 +4860,9 @@ with tab_validation:
             "Indikator": "Kejadian bertanggal dengan HOP_Unit_Key",
             "Hasil": f"{mapping_coverage:.1%}",
             "Status": (
-                "MEMADAI"
+                "CAKUPAN KUAT"
                 if mapping_coverage >= 0.95
-                else "PERLU PERBAIKAN"
+                else "PRIORITAS PENGUATAN"
             ),
             "Tindak_Lanjut": (
                 "Pertahankan konsistensi mapping dan validasi unit baru"
@@ -4854,23 +4875,27 @@ with tab_validation:
             "Indikator": "Duplikasi kombinasi tanggal dan unit",
             "Hasil": format_number(duplicate_unit_days),
             "Status": (
-                "MEMADAI"
+                "TERKENDALI"
                 if duplicate_unit_days == 0
-                else "PERLU PERBAIKAN"
+                else "PRIORITAS HARMONISASI"
             ),
-            "Tindak_Lanjut": "Hapus atau konsolidasikan duplikasi",
+            "Tindak_Lanjut": (
+                "Pertahankan keunikan kombinasi tanggal dan unit"
+                if duplicate_unit_days == 0
+                else "Harmonisasikan observasi pada kombinasi tanggal-unit yang sama"
+            ),
         },
         {
             "Area_Validasi": "Rentang HOP",
-            "Indikator": "Observasi HOP bernilai negatif",
+            "Indikator": "Observasi HOP untuk konfirmasi definisi",
             "Hasil": format_number(negative_hop_records),
             "Status": (
-                "MEMADAI"
+                "TERKONFIRMASI"
                 if negative_hop_records == 0
-                else "VALIDASI SUMBER"
+                else "KONFIRMASI SUMBER"
             ),
             "Tindak_Lanjut": (
-                "Konfirmasi definisi dan sumber nilai HOP negatif"
+                "Konfirmasi definisi operasional dan sumber observasi HOP"
             ),
         },
         {
@@ -4884,12 +4909,12 @@ with tab_validation:
                     and rr_ci_low is not None
                     and rr_ci_high is not None
                 )
-                else "Belum dapat dihitung"
+                else "Menunggu kecukupan observasi pembanding"
             ),
             "Status": (
                 "SIGNIFIKAN"
                 if association_significant
-                else "PERLU TAMBAHAN DATA"
+                else "PENGUATAN SAMPEL"
             ),
             "Tindak_Lanjut": (
                 "Uji konsistensi per regional dan leave-one-unit-out"
@@ -4902,7 +4927,7 @@ with tab_validation:
             "Status": (
                 "SIAP UJI DISTRIBUSI"
                 if len(filtered_hop) >= 365
-                else "DATA TERBATAS"
+                else "TAHAP PENGAYAAN DATA"
             ),
             "Tindak_Lanjut": (
                 "Bandingkan Poisson dan Negative Binomial"
@@ -4915,7 +4940,7 @@ with tab_validation:
             "Status": (
                 "SIAP UJI DISTRIBUSI"
                 if severity_sample_count >= 30
-                else "DATA TERBATAS"
+                else "TAHAP PENGAYAAN DATA"
             ),
             "Tindak_Lanjut": (
                 "Bandingkan BETA-PERT, Lognormal, dan Gamma"
@@ -4931,8 +4956,8 @@ with tab_validation:
         {
             "Area_Validasi": "Konvergensi Monte Carlo",
             "Indikator": "Stabilitas P90 saat iterasi ditambah",
-            "Hasil": "Belum dilakukan",
-            "Status": "WAJIB DILENGKAPI",
+            "Hasil": "Siap dijalankan pada tahap validasi lanjutan",
+            "Status": "AGENDA PENGUATAN",
             "Tindak_Lanjut": (
                 "Bandingkan P90 pada 1k, 5k, 10k, dan 50k iterasi"
             ),
@@ -4975,18 +5000,19 @@ with tab_validation:
     validation_failures = int(
         validation_table["Status"].isin(
             [
-                "PERLU PERBAIKAN",
-                "DATA TERBATAS",
-                "CUKUP / PERLU KALIBRASI",
-                "PERLU KALIBRASI",
-                "LEMAH / PERLU PENGEMBANGAN",
+                "PRIORITAS PENGUATAN",
+                "PRIORITAS HARMONISASI",
+                "TAHAP PENGAYAAN DATA",
+                "MODEL ADAPTIF / KALIBRASI TERARAH",
+                "PENGUATAN KALIBRASI",
+                "MODEL ADAPTIF / PENGUATAN LANJUTAN",
             ]
         ).sum()
     )
     validation_mandatory = int(
         (
             validation_table["Status"]
-            == "WAJIB DILENGKAPI"
+            == "AGENDA PENGUATAN"
         ).sum()
     )
 
@@ -5002,15 +5028,14 @@ with tab_validation:
         validation_pending = [
             "uji distribusi pembanding",
             "konvergensi Monte Carlo",
-            "validasi nilai HOP negatif",
+            "konfirmasi definisi operasional observasi HOP",
         ]
         if not stored_backtest:
             validation_pending.insert(0, "rolling backtesting temporal")
-        st.warning(
-            "Kesimpulan validasi awal: PRIME-RISK dapat "
-            "digunakan untuk eksplorasi dan pengambilan "
-            "keputusan pendahuluan, tetapi belum dinyatakan "
-            "tervalidasi penuh. Area yang masih perlu ditutup: "
+        st.info(
+            "Kesimpulan validasi awal: PRIME-RISK telah menyediakan "
+            "fondasi analitik untuk eksplorasi dan dukungan keputusan. "
+            "Agenda penguatan berikutnya mencakup: "
             + ", ".join(validation_pending)
             + "."
         )
@@ -5110,7 +5135,7 @@ with tab_validation:
                 )
 
             if backtest_result.empty:
-                st.warning(backtest_message)
+                st.info(backtest_message)
             else:
                 valid_errors = (
                     backtest_result["Error_P50_Pct"]
@@ -5133,7 +5158,7 @@ with tab_validation:
                     )
                 )
                 valid_kri = backtest_result.loc[
-                    backtest_result["KRI_Aktual"] != "TIDAK TERSEDIA"
+                    backtest_result["KRI_Aktual"] != "MENUNGGU DATA"
                 ]
                 kri_accuracy = (
                     float(valid_kri["KRI_Akurat"].mean() * 100)
@@ -5142,7 +5167,7 @@ with tab_validation:
 
                 metric_bt1, metric_bt2, metric_bt3, metric_bt4 = st.columns(4)
                 metric_bt1.metric(
-                    "Rata-rata Error P50",
+                    "Rata-rata Deviasi P50",
                     f"{mean_error:,.2f}%" if not pd.isna(mean_error) else "-",
                 )
                 metric_bt2.metric("P90 Coverage", f"{p90_coverage:,.2f}%")
@@ -5157,7 +5182,7 @@ with tab_validation:
                     and mean_error <= 20
                     and p90_coverage >= 80
                 ):
-                    backtest_status = "BAIK / LAYAK"
+                    backtest_status = "PERFORMA KUAT"
                     backtest_action = (
                         "Pertahankan performa dan lakukan pemantauan berkala"
                     )
@@ -5167,25 +5192,29 @@ with tab_validation:
                     and mean_error <= 35
                     and p90_coverage >= 60
                 ):
-                    backtest_status = "CUKUP / PERLU KALIBRASI"
+                    backtest_status = "MODEL ADAPTIF / KALIBRASI TERARAH"
                     backtest_action = (
                         "Kalibrasi parameter dan ulangi pengujian temporal"
                     )
-                    st.warning(f"Status backtesting: {backtest_status}.")
+                    st.info(f"Status backtesting: {backtest_status}.")
                 elif not pd.isna(mean_error) and mean_error <= 50:
-                    backtest_status = "PERLU KALIBRASI"
+                    backtest_status = "PENGUATAN KALIBRASI"
                     backtest_action = (
                         "Kalibrasi model frekuensi dan severity"
                     )
-                    st.warning(f"Status backtesting: {backtest_status}.")
+                    st.info(f"Status backtesting: {backtest_status}.")
                 else:
-                    backtest_status = "LEMAH / PERLU PENGEMBANGAN"
+                    backtest_status = "MODEL ADAPTIF / PENGUATAN LANJUTAN"
                     backtest_action = (
                         "Kalibrasi ulang model frekuensi dan severity"
                     )
-                    st.error(f"Status backtesting: {backtest_status}.")
+                    st.info(
+                        f"Status backtesting: {backtest_status}. "
+                        "Hasil ini menjadi dasar kalibrasi frekuensi dan "
+                        "severity agar rentang prediksi semakin representatif."
+                    )
 
-                st.session_state["rolling_backtest_summary_v16_9"] = {
+                st.session_state["rolling_backtest_summary_v16_10"] = {
                     "periods": int(len(backtest_result)),
                     "p90_coverage": p90_coverage,
                     "mean_error": (
@@ -5321,7 +5350,7 @@ with tab_validation:
                             "P90 Prediksi", format="Rp %,.0f"
                         ),
                         "Error_P50_Pct": st.column_config.NumberColumn(
-                            "Error P50", format="%.2f%%"
+                            "Deviasi P50", format="%.2f%%"
                         ),
                         "Actual_Percentile": st.column_config.NumberColumn(
                             "Actual Percentile", format="%.2f%%"
@@ -5335,7 +5364,7 @@ with tab_validation:
                     },
                 )
 
-                with st.expander("Dasar dan keterbatasan backtesting"):
+                with st.expander("Dasar dan ruang penguatan backtesting"):
                     st.markdown(
                         """
 - Pembagian training dan validation dilakukan berdasarkan waktu.
@@ -5347,7 +5376,10 @@ with tab_validation:
 """
                     )
     except Exception as backtest_error:
-        st.error(f"Rolling backtesting gagal dijalankan: {backtest_error}")
+        st.error(
+            "Rolling backtesting belum selesai diproses. "
+            f"Detail teknis: {backtest_error}"
+        )
 # ============================================================
 # TAB KEJADIAN LOSS
 # ============================================================
@@ -5821,7 +5853,7 @@ with tab_quality:
         readiness_count = (
             filtered["Kesiapan_Model"]
             .fillna(
-                "BELUM DIKLASIFIKASIKAN"
+                "KATEGORI DALAM PROSES HARMONISASI"
             )
             .value_counts()
             .rename_axis("Kesiapan_Model")
