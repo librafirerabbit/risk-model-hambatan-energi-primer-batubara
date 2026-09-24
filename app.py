@@ -31,7 +31,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.25-dark-mode-readable"
+APP_VERSION = "2026.09.24-v16.26-seamless-loss-tab"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -101,6 +101,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def dataframe_to_csv_bytes(dataframe: pd.DataFrame) -> bytes:
+    """Menyimpan hasil serialisasi CSV agar tidak dibuat ulang tiap rerun."""
+
+    return dataframe.to_csv(index=False).encode("utf-8-sig")
 
 
 # ============================================================
@@ -6414,7 +6421,7 @@ with tab_validation:
             f"Detail teknis: {backtest_error}"
         )
 # ============================================================
-# TAB KEJADIAN LOSS
+# TAB KEJADIAN LOSS — OPTIMIZED / PAGINATED
 # ============================================================
 
 with tab_loss:
@@ -6422,7 +6429,8 @@ with tab_loss:
 
     st.caption(
         "Setiap baris merepresentasikan satu event individual dengan "
-        "Event_ID sebagai identitas unik utama model."
+        "Event_ID sebagai identitas unik utama model. Tabel menggunakan "
+        "pagination agar tetap ringan walaupun jumlah event bertambah."
     )
 
     display_columns = [
@@ -6455,9 +6463,9 @@ with tab_loss:
         if column in filtered.columns
     ]
 
-    loss_display = filtered[
-        display_columns
-    ].copy()
+    # Dataset penuh tetap dipertahankan untuk audit trail dan unduhan.
+    # Hanya potongan halaman aktif yang dikirim ke st.dataframe.
+    loss_display = filtered.loc[:, display_columns].copy()
 
     sort_columns = [
         column
@@ -6472,19 +6480,207 @@ with tab_loss:
         loss_display = loss_display.sort_values(
             sort_columns,
             ascending=False,
+            kind="stable",
         )
 
+    # --------------------------------------------------------
+    # QUICK SEARCH + PAGE SIZE
+    # --------------------------------------------------------
+    search_col, rows_col, info_col = st.columns(
+        [2.4, 1.0, 1.2],
+        gap="small",
+    )
+
+    with search_col:
+        loss_search = st.text_input(
+            "Cari event",
+            value="",
+            placeholder=(
+                "Event ID, unit, regional, subkategori, penyebab..."
+            ),
+            key="loss_quick_search_v16_26",
+        ).strip()
+
+    with rows_col:
+        rows_per_page = st.selectbox(
+            "Baris / halaman",
+            options=[50, 100, 250, 500],
+            index=1,
+            key="loss_rows_per_page_v16_26",
+        )
+
+    search_result = loss_display
+
+    if loss_search:
+        search_terms = loss_search.casefold().split()
+        search_columns = [
+            column
+            for column in [
+                LOSS_ID_COLUMN,
+                "Regional",
+                "Unit_Asli",
+                "HOP_Unit_Key",
+                "Kategori_Final",
+                "Subkategori_Event",
+                "Penyebab_Source",
+                "Status_HOP",
+                "Kesiapan_Model",
+            ]
+            if column in loss_display.columns
+        ]
+
+        if search_columns:
+            # Gabungkan hanya kolom teks yang memang relevan untuk pencarian.
+            # Ini lebih ringan daripada mengubah seluruh 21 kolom menjadi string.
+            searchable_text = (
+                loss_display[search_columns]
+                .fillna("")
+                .astype(str)
+                .agg(" ".join, axis=1)
+                .str.casefold()
+            )
+
+            search_mask = pd.Series(
+                True,
+                index=loss_display.index,
+            )
+            for term in search_terms:
+                search_mask &= searchable_text.str.contains(
+                    term,
+                    regex=False,
+                    na=False,
+                )
+
+            search_result = loss_display.loc[search_mask]
+
+    total_rows = int(len(search_result))
+    total_pages = max(
+        1,
+        math.ceil(total_rows / int(rows_per_page)),
+    )
+
+    page_state_key = "loss_current_page_v16_26"
+    current_page = int(
+        st.session_state.get(page_state_key, 1)
+    )
+    current_page = max(1, min(current_page, total_pages))
+    st.session_state[page_state_key] = current_page
+
+    with info_col:
+        st.metric(
+            "Event ditemukan",
+            format_number(total_rows),
+            help=(
+                "Jumlah event setelah filter dashboard dan quick search."
+            ),
+        )
+
+    # --------------------------------------------------------
+    # PAGINATION CONTROLS
+    # --------------------------------------------------------
+    nav_prev, nav_page, nav_next, nav_range = st.columns(
+        [0.8, 1.2, 0.8, 2.2],
+        gap="small",
+    )
+
+    with nav_prev:
+        if st.button(
+            "← Sebelumnya",
+            disabled=current_page <= 1,
+            use_container_width=True,
+            key="loss_prev_page_v16_26",
+        ):
+            st.session_state[page_state_key] = current_page - 1
+            st.rerun()
+
+    with nav_page:
+        page_widget_key = "loss_page_number_v16_26"
+        if page_widget_key in st.session_state:
+            stored_widget_page = int(st.session_state[page_widget_key])
+            if stored_widget_page < 1 or stored_widget_page > total_pages:
+                st.session_state[page_widget_key] = current_page
+
+        selected_page = st.number_input(
+            "Halaman",
+            min_value=1,
+            max_value=total_pages,
+            value=current_page,
+            step=1,
+            key=page_widget_key,
+        )
+        selected_page = int(selected_page)
+
+        if selected_page != current_page:
+            st.session_state[page_state_key] = selected_page
+            current_page = selected_page
+
+    with nav_next:
+        if st.button(
+            "Selanjutnya →",
+            disabled=current_page >= total_pages,
+            use_container_width=True,
+            key="loss_next_page_v16_26",
+        ):
+            st.session_state[page_state_key] = current_page + 1
+            st.rerun()
+
+    start_row = (current_page - 1) * int(rows_per_page)
+    end_row = min(
+        start_row + int(rows_per_page),
+        total_rows,
+    )
+
+    with nav_range:
+        if total_rows:
+            st.caption(
+                f"Menampilkan **{start_row + 1:,}–{end_row:,}** dari "
+                f"**{total_rows:,}** event · Halaman "
+                f"**{current_page:,}/{total_pages:,}**"
+            )
+        else:
+            st.caption("Tidak ada event yang sesuai dengan pencarian.")
+
+    loss_page = search_result.iloc[
+        start_row:end_row
+    ]
+
+    # Penting untuk performa: jangan gunakan pandas Styler pada tabel event.
+    # CSS global PRIME-RISK sudah menangani header dan zebra rows.
     st.dataframe(
-        style_banded_table(loss_display),
+        loss_page,
         use_container_width=True,
         hide_index=True,
-        height=620,
+        height=600,
         column_config={
             LOSS_ID_COLUMN: (
                 st.column_config.TextColumn(
                     "Event ID",
                     width="medium",
                 )
+            ),
+            "Regional": st.column_config.TextColumn(
+                "Regional",
+                width="small",
+            ),
+            "Unit_Asli": st.column_config.TextColumn(
+                "Unit Asli",
+                width="medium",
+            ),
+            "HOP_Unit_Key": st.column_config.TextColumn(
+                "HOP Unit Key",
+                width="medium",
+            ),
+            "Kategori_Final": st.column_config.TextColumn(
+                "Kategori",
+                width="medium",
+            ),
+            "Subkategori_Event": st.column_config.TextColumn(
+                "Subkategori Event",
+                width="medium",
+            ),
+            "Penyebab_Source": st.column_config.TextColumn(
+                "Penyebab",
+                width="large",
             ),
             "Jenis_Kejadian_Loss": (
                 st.column_config.TextColumn(
@@ -6530,18 +6726,33 @@ with tab_loss:
         },
     )
 
-    csv_loss = loss_display.to_csv(
-        index=False
-    ).encode("utf-8")
-
-    st.download_button(
-        "Unduh Kejadian Loss (CSV)",
-        data=csv_loss,
-        file_name=(
-            "kejadian_loss_terfilter.csv"
-        ),
-        mime="text/csv",
+    # --------------------------------------------------------
+    # DOWNLOAD — seluruh hasil filter/search, bukan hanya halaman aktif
+    # --------------------------------------------------------
+    download_col, download_info = st.columns(
+        [1.1, 2.9],
+        gap="small",
     )
+
+    with download_col:
+        csv_loss = dataframe_to_csv_bytes(
+            search_result
+        )
+
+        st.download_button(
+            "Unduh Kejadian Loss (CSV)",
+            data=csv_loss,
+            file_name="kejadian_loss_terfilter.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="download_loss_csv_v16_26",
+        )
+
+    with download_info:
+        st.caption(
+            "Unduhan berisi seluruh event sesuai filter dashboard dan "
+            "quick search, bukan hanya baris pada halaman yang sedang tampil."
+        )
 
 
 # ============================================================
