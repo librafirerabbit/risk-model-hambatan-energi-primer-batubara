@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.13-stress-test"
+APP_VERSION = "2026.09.24-v16.14-focused-category-scope"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -65,63 +65,16 @@ SHEET_MAPPING = "Mapping_Unit"
 LOSS_ID_COLUMN = "Kejadian_Loss_ID"
 
 
-# Scope kompetisi: kejadian yang berkaitan langsung dengan energi primer
-# batubara serta peralatan pendukung pada rantai coal handling, milling,
-# feeding, combustion, dan boiler island. Daftar ini sengaja eksplisit agar
-# hasil dapat diaudit dan tidak berubah hanya karena variasi narasi bebas.
+# Scope kompetisi yang disepakati: hanya lima subkategori hambatan energi
+# primer. Pencocokan dilakukan secara eksplisit terhadap Subkategori_Event
+# agar hasil stabil, mudah diaudit, dan tidak melebar karena narasi bebas.
 PRIMARY_ENERGY_SUBCATEGORIES = {
-    "air heater",
-    "boiler control systems",
-    "boiler furnace temp",
-    "boiler insp",
-    "bottom ash systems",
-    "coal flow maks",
-    "coal handling",
-    "coal quality",
     "coal supply",
-    "combustion tuning",
-    "ggn aph",
-    "ggn bed temp",
-    "ggn boiler",
-    "ggn boiler auxiliaries",
-    "ggn chain grate",
-    "ggn chf",
-    "ggn coal feeder",
-    "ggn economizer",
-    "ggn hp fan",
-    "ggn induced draught fan",
-    "ggn instrumentasi boiler",
-    "ggn kualitas batubara",
-    "ggn mft boiler",
-    "ggn mill-feeder",
-    "ggn primary air fan",
-    "ggn proteksi boiler",
-    "ggn safety valve",
-    "ggn sistem pembakaran",
-    "ggn tube boiler leak",
     "keterbatasan batubara mrc",
     "keterbatasan volume batubara",
-    "mill-feeder",
     "plugging",
     "plugging/kualitas batubara",
-    "reheater",
-    "rsh",
-    "slag and ash removal",
-    "superheater",
-    "system piping boiler & valve",
-    "tube leak boiler",
-    "walltube",
-    "wet coal",
 }
-
-# Fallback hanya digunakan bila subkategori kosong/generik. Pola mencakup
-# istilah pasokan, mutu, penanganan batubara, serta sistem pembakaran/boiler.
-PRIMARY_ENERGY_FALLBACK_PATTERN = (
-    r"batubara|batu\s*bara|coal|mrc|hop\b|stok|stock|pasokan|tongkang|"
-    r"bunker|feeder|mill|plugging|wet\s*coal|slagging|furnace|"
-    r"combust|pembakaran|chain\s*grate|boiler|bed\s*temp|"
-    r"air\s*heater|\baph\b|primary\s*air|induced\s*draught|\bchf\b"
-)
 
 
 MONTH_LABELS = {
@@ -993,7 +946,7 @@ def prepare_loss_event_detail_v2(
 def apply_primary_energy_scope(
     data: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Menandai kejadian energi primer dan peralatan pendukungnya.
+    """Menandai lima subkategori energi primer yang disepakati.
 
     Sumber tidak diubah. Klasifikasi dilakukan saat aplikasi membaca data,
     sehingga seluruh kalkulasi memakai satu definisi scope yang konsisten.
@@ -1014,48 +967,16 @@ def apply_primary_energy_scope(
     explicit_scope = subcategory.isin(
         PRIMARY_ENERGY_SUBCATEGORIES
     )
-    generic_subcategory = subcategory.isin(
-        {"", "others", "other", "lain-lain", "lainnya"}
-    )
-
-    fallback_text = pd.Series(
-        "", index=data.index, dtype="object"
-    )
-    for column in [
-        "Permasalahan",
-        "Penyebab_Source",
-        "Status_Kinerja",
-    ]:
-        if column in data.columns:
-            fallback_text = (
-                fallback_text
-                + " "
-                + data[column].fillna("").astype(str)
-            )
-
-    fallback_scope = (
-        generic_subcategory
-        & fallback_text.str.contains(
-            PRIMARY_ENERGY_FALLBACK_PATTERN,
-            case=False,
-            regex=True,
-            na=False,
-        )
-    )
-
-    in_scope = explicit_scope | fallback_scope
+    in_scope = explicit_scope
     data["Scope_Model"] = np.where(
         in_scope,
-        "ENERGI PRIMER & PERALATAN PENDUKUNG",
+        "LIMA SUBKATEGORI ENERGI PRIMER",
         "DI LUAR SCOPE MODEL",
     )
-    data["Dasar_Scope"] = np.select(
-        [explicit_scope, fallback_scope],
-        [
-            "Subkategori terverifikasi",
-            "Narasi energi primer pada kategori generik",
-        ],
-        default="Di luar definisi scope",
+    data["Dasar_Scope"] = np.where(
+        explicit_scope,
+        "Subkategori energi primer terpilih",
+        "Di luar lima subkategori terpilih",
     )
 
     return data
@@ -1260,7 +1181,7 @@ if "Scope_Model" not in loss_data.columns:
 
 loss_data = loss_data.loc[
     loss_data["Scope_Model"].eq(
-        "ENERGI PRIMER & PERALATAN PENDUKUNG"
+        "LIMA SUBKATEGORI ENERGI PRIMER"
     )
 ].copy()
 
@@ -1414,7 +1335,7 @@ st.sidebar.caption(
 )
 
 st.sidebar.caption(
-    "Scope aktif: Energi primer batubara & peralatan pendukung"
+    "Scope aktif: 5 subkategori hambatan energi primer"
 )
 
 with st.sidebar.expander("Audit cakupan model", expanded=False):
@@ -1505,7 +1426,7 @@ st.subheader(
 
 st.caption(
     "Model prediktif khusus kejadian hambatan energi primer "
-    "batubara dan peralatan pendukung, berbasis HOP, Kejadian Loss, asosiasi "
+    "batubara pada lima subkategori terpilih, berbasis HOP, Kejadian Loss, asosiasi "
     "statistik, BETA-PERT, Monte Carlo, probability "
     "of exceedance, dan risk heat map."
 )
@@ -1596,7 +1517,7 @@ st.success(
 
 # Penampung hasil antar-tab untuk laporan PDF.
 report_monte_carlo = st.session_state.get(
-    "report_monte_carlo_v16_12_scope_a",
+    "report_monte_carlo_v16_14_focused_scope",
     {},
 )
 report_prediction = {}
@@ -3242,7 +3163,7 @@ with tab_monte_carlo:
             # Pertahankan hasil simulasi lintas-rerun agar bagian Monte Carlo
             # tetap masuk ke PDF saat tombol pembuatan laporan ditekan.
             st.session_state[
-                "report_monte_carlo_v16_12_scope_a"
+                "report_monte_carlo_v16_14_focused_scope"
             ] = report_monte_carlo
 
             (
@@ -3630,12 +3551,12 @@ with tab_stress_test:
                 "uji dan menekan kesinambungan operasi."
             ),
         },
-        "Extreme compound — pasokan & coal handling": {
+        "Extreme compound — pasokan, kualitas & plugging": {
             "frequency": 2.50,
             "severity": 2.00,
             "assumption": (
-                "Tekanan pasokan terjadi bersamaan dengan keterbatasan "
-                "peralatan pendukung coal handling."
+                "Tekanan pasokan terjadi bersamaan dengan penurunan kualitas "
+                "batubara dan peningkatan kejadian plugging."
             ),
         },
     }
@@ -3643,7 +3564,7 @@ with tab_stress_test:
     scenario_name = st.selectbox(
         "Skenario stress test",
         options=list(stress_scenarios),
-        key="stress_scenario_v16_13",
+        key="stress_scenario_v16_14",
     )
     scenario_defaults = stress_scenarios[scenario_name]
 
@@ -3681,7 +3602,7 @@ with tab_stress_test:
             max_value=100_000,
             value=10_000,
             step=1_000,
-            key="stress_iterations_v16_13",
+            key="stress_iterations_v16_14",
         )
 
     st.info("**Asumsi skenario:** " + scenario_defaults["assumption"])
@@ -3692,14 +3613,14 @@ with tab_stress_test:
         max_value=999_999,
         value=2026,
         step=1,
-        key="stress_seed_v16_13",
+        key="stress_seed_v16_14",
     )
 
     run_stress_test = st.button(
         "Jalankan Stress Test",
         type="primary",
         use_container_width=True,
-        key="run_stress_test_v16_13",
+        key="run_stress_test_v16_14",
     )
 
     if run_stress_test:
@@ -3777,7 +3698,7 @@ with tab_stress_test:
                     result["risk_score"]
                 )
 
-            st.session_state["stress_test_v16_13"] = {
+            st.session_state["stress_test_v16_14"] = {
                 "scenario": scenario_name,
                 "frequency_multiplier": float(frequency_multiplier),
                 "severity_multiplier": float(severity_multiplier),
@@ -3787,7 +3708,7 @@ with tab_stress_test:
         except Exception as stress_error:
             st.error("Stress test belum berhasil: " + str(stress_error))
 
-    stored_stress = st.session_state.get("stress_test_v16_13")
+    stored_stress = st.session_state.get("stress_test_v16_14")
     if stored_stress:
         baseline_result = stored_stress["baseline"]
         stress_result = stored_stress["stress"]
@@ -5533,7 +5454,7 @@ with tab_validation:
     )
 
     stored_backtest = st.session_state.get(
-        "rolling_backtest_summary_v16_12_scope_a"
+        "rolling_backtest_summary_v16_14_focused_scope"
     )
     if stored_backtest:
         backtest_validation_result = (
@@ -5921,7 +5842,7 @@ with tab_validation:
                         "severity agar rentang prediksi semakin representatif."
                     )
 
-                st.session_state["rolling_backtest_summary_v16_12_scope_a"] = {
+                st.session_state["rolling_backtest_summary_v16_14_focused_scope"] = {
                     "periods": int(len(backtest_result)),
                     "p90_coverage": p90_coverage,
                     "mean_error": (
@@ -6793,7 +6714,7 @@ with tab_report:
 
             stress_report_rows = []
             report_stress_test = st.session_state.get(
-                "stress_test_v16_13"
+                "stress_test_v16_14"
             )
             if report_stress_test:
                 report_stress_baseline = report_stress_test["baseline"]
@@ -6969,7 +6890,7 @@ with tab_report:
                     risk_limit_rp
                 ),
                 "model_scope": (
-                    "Hambatan energi primer batubara dan peralatan pendukung"
+                    "Lima subkategori hambatan energi primer batubara"
                 ),
                 "scope_records": (
                     f"{scope_model_records:,} dari {scope_total_records:,} "
@@ -7087,13 +7008,17 @@ frekuensi secara berlebihan atau *double counting*.
 
 ### Cakupan analitik
 
-Model utama hanya menggunakan kejadian yang terkait
-langsung dengan energi primer batubara dan peralatan
-pendukung pada rantai coal handling, milling, feeding,
-combustion, dan boiler island. Kejadian turbin, generator,
-jaringan, kondensor, intake air, dan outage umum tetap
-berada pada source untuk audit, tetapi tidak masuk ke
-perhitungan PRIME-RISK.
+Model utama hanya menggunakan lima subkategori hambatan
+energi primer batubara:
+
+- Plugging;
+- Plugging/Kualitas Batubara;
+- Keterbatasan Volume Batubara;
+- Keterbatasan Batubara MRC; dan
+- Coal Supply.
+
+Kategori lainnya tetap berada pada source untuk audit,
+tetapi tidak masuk ke perhitungan PRIME-RISK.
 
 Nilai HOP sumber yang negatif diperlakukan sebagai **0**
 pada layer Python dan diberi penanda audit. File sumber
