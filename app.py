@@ -29,7 +29,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-APP_VERSION = "2026.09.24-v16.16-event-id-sumkal-fix"
+APP_VERSION = "2026.09.24-v16.16"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
