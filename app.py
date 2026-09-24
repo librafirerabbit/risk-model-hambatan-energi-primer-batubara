@@ -1404,10 +1404,7 @@ st.caption(
 )
 
 st.info(
-    "Scope analitik aktif: kejadian energi primer batubara dan peralatan "
-    "pendukung pada rantai coal handling, milling, feeding, combustion, "
-    "dan boiler island. HOP negatif dinormalisasi menjadi 0 hanya dalam "
-    "perhitungan; data sumber tetap dipertahankan."
+   
 )
 
 
