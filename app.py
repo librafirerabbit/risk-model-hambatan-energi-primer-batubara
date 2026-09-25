@@ -2154,9 +2154,9 @@ with tab_summary:
             y=summary_category_column,
             orientation="h",
             title=(
-                "Top 15 Loss Opportunity per Subkategori"
+                "Loss Opportunity"
                 if summary_category_column == "Subkategori_Event"
-                else "Loss Opportunity per Kategori"
+                else "Loss Opportunity"
             ),
             labels={
                 "Kategori_Final": "Kategori",
